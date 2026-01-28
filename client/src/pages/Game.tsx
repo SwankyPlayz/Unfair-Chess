@@ -1,19 +1,19 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { Chess, Move } from "chess.js";
+import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
-import { motion, AnimatePresence } from "framer-motion";
-import { AlertCircle, Terminal, Cpu, RotateCcw } from "lucide-react";
+import { motion } from "framer-motion";
+import { AlertCircle, Cpu, RotateCcw, Crown, Zap, Shield } from "lucide-react";
 
-import { useGame, useHumanMove, useAiMove } from "@/hooks/use-game";
+import { useGame, useHumanMove } from "@/hooks/use-game";
 import { RetroButton } from "@/components/ui/RetroButton";
 import { GameCard, TerminalCard } from "@/components/ui/GameCard";
 import { type Game } from "@shared/schema";
+import { AI_PERSONALITIES } from "@shared/schema";
 
 export default function GamePage() {
   const [, params] = useRoute("/game/:id");
   const id = Number(params?.id);
-  const [, setLocation] = useLocation();
   const { data: game, isLoading, error } = useGame(id);
 
   if (isLoading) return <LoadingScreen />;
@@ -22,53 +22,45 @@ export default function GamePage() {
   return <GameInterface game={game} />;
 }
 
+function getPersonalityDisplay(personalityId: string): { name: string; description: string } {
+  const found = AI_PERSONALITIES.find(p => p.id === personalityId);
+  return found || { name: "Unknown", description: "" };
+}
+
 function GameInterface({ game }: { game: Game }) {
   const [chess] = useState(new Chess(game.fen));
   const [fen, setFen] = useState(game.fen);
   
   const { mutate: humanMove, isPending: isMoving } = useHumanMove();
-  const { mutate: aiMove, isPending: isAiThinking } = useAiMove();
 
-  // Sync local chess instance with backend FEN
   useEffect(() => {
     try {
-      // Create a temp instance to validate FEN before applying
-      // AI might send weird FENs, we need to handle them gracefully if possible
-      // But mostly we just trust backend FEN
-      const newGame = new Chess(game.fen);
       setFen(game.fen);
-      // We don't necessarily update 'chess' state variable because react-chessboard takes 'position' prop
-      // However, for onDrop validation, we need a chess instance that matches current board
       chess.load(game.fen);
     } catch (e) {
       console.error("Invalid FEN from server:", game.fen);
     }
   }, [game.fen, chess]);
 
-  // Handle Drag & Drop
-  function onDrop(sourceSquare: string, targetSquare: string, piece: string) {
-    if (game.turn !== 'w' || game.isGameOver) return false;
+  function onDrop(sourceSquare: string, targetSquare: string) {
+    if (game.turn !== 'w' || game.isGameOver || isMoving) return false;
 
     try {
-      // Validate move locally first
       const move = chess.move({
         from: sourceSquare,
         to: targetSquare,
-        promotion: "q", // always promote to queen for simplicity in drag/drop
+        promotion: "q",
       });
 
       if (!move) return false;
 
-      // Optimistic update
       setFen(chess.fen());
 
-      // Send to backend
       humanMove({ 
         gameId: game.id, 
         move: { from: sourceSquare, to: targetSquare, promotion: "q" } 
       }, {
         onError: () => {
-          // Revert on error
           chess.undo();
           setFen(chess.fen());
         }
@@ -80,105 +72,148 @@ function GameInterface({ game }: { game: Game }) {
     }
   }
 
-  const isPlayerTurn = game.turn === 'w' && !game.isGameOver;
-  const isAiTurn = game.turn === 'b' && !game.isGameOver;
+  const isPlayerTurn = game.turn === 'w' && !game.isGameOver && !isMoving;
+  const isAiThinking = isMoving;
+  const personality = getPersonalityDisplay(game.aiPersonality);
+
+  const getTurnStatus = () => {
+    if (game.isGameOver) {
+      if (game.result === 'checkmate') {
+        return game.winner === 'human' ? "YOU WIN" : `${game.aiName} WINS`;
+      }
+      return "DRAW";
+    }
+    if (isAiThinking) return `${game.aiName} is thinking...`;
+    if (game.isCheck) return "CHECK";
+    if (isPlayerTurn) return "Your move";
+    return "Waiting...";
+  };
+
+  const getStatusColor = () => {
+    if (game.isGameOver) {
+      return game.winner === 'human' ? "text-green-400" : "text-destructive";
+    }
+    if (game.isCheck) return "text-yellow-400";
+    if (isAiThinking) return "text-destructive animate-pulse";
+    return "text-primary";
+  };
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8 flex flex-col md:flex-row gap-8 items-center justify-center relative overflow-hidden">
-      {/* Ambience */}
       <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-50" />
       
-      {/* Left Panel: Game Info & Terminal */}
       <div className="w-full max-w-md space-y-6 order-2 md:order-1">
         <GameCard>
-            <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2">
-                    <Cpu className={isAiTurn ? "text-destructive animate-pulse" : "text-muted-foreground"} />
-                    MATCH STATUS
-                </h2>
-                <div className={`px-3 py-1 rounded-full text-xs font-bold font-mono border ${
-                    game.isGameOver ? "bg-muted text-white border-white" :
-                    isPlayerTurn ? "bg-primary/20 text-primary border-primary/50" : "bg-destructive/20 text-destructive border-destructive/50"
-                }`}>
-                    {game.isGameOver ? "GAME OVER" : isPlayerTurn ? "PLAYER TURN" : "AI TURN"}
-                </div>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-primary/20 border border-primary/30">
+              <Crown className="w-6 h-6 text-primary" />
             </div>
+            <div>
+              <p className="text-xs text-muted-foreground font-mono">YOU</p>
+              <p className="text-lg font-bold text-white">Human Player</p>
+            </div>
+          </div>
+          
+          <div className="text-center py-4 mb-4 border-y border-white/10">
+            <p className="text-xs text-muted-foreground mb-1">VS</p>
+            <h2 className={`text-2xl font-display font-bold ${getStatusColor()}`}>
+              {getTurnStatus()}
+            </h2>
+          </div>
 
-            {game.isGameOver && (
-                <div className="mb-6 p-4 rounded bg-white/5 border border-white/10 text-center">
-                    <h3 className="text-xl font-bold mb-1 text-white">
-                        {game.result === 'checkmate' ? "CHECKMATE" : "GAME OVER"}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                        {game.turn === 'w' ? "The AI has defeated you." : "You defeated the AI... for now."}
-                    </p>
-                </div>
-            )}
-
-            <TerminalCard title="AI_LOGIC_CORE.log" className="h-64 mb-6">
-                <div className="space-y-4">
-                    {game.history && game.history.length === 0 && (
-                        <p className="text-muted-foreground">Waiting for game start...</p>
-                    )}
-                    {game.aiComment && (
-                        <div className="text-destructive font-bold animate-in fade-in slide-in-from-left-2 duration-300">
-                            <span className="text-xs opacity-50 mr-2">[AI]:</span>
-                            "{game.aiComment}"
-                        </div>
-                    )}
-                    {isAiThinking && (
-                        <div className="text-primary animate-pulse">
-                            <span className="text-xs opacity-50 mr-2">[SYS]:</span>
-                            Calculating unfair advantage...
-                        </div>
-                    )}
-                </div>
-            </TerminalCard>
-
-            <AnimatePresence>
-                {isAiTurn && (
-                    <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                    >
-                        <RetroButton 
-                            variant="destructive" 
-                            className="w-full"
-                            onClick={() => aiMove({ gameId: game.id })}
-                            isLoading={isAiThinking}
-                            disabled={isAiThinking}
-                        >
-                            {isAiThinking ? "AI IS CHEATING..." : "TRIGGER AI MOVE"}
-                        </RetroButton>
-                        <p className="text-xs text-center text-muted-foreground mt-2">
-                            * AI may break rules. Prepare yourself.
-                        </p>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-destructive/20 border border-destructive/30">
+              <Cpu className={`w-6 h-6 text-destructive ${isAiThinking ? 'animate-pulse' : ''}`} />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground font-mono">AI OPPONENT</p>
+              <p className="text-lg font-bold text-white" data-testid="text-ai-name">{game.aiName}</p>
+              <p className="text-xs text-muted-foreground">{personality.name}</p>
+            </div>
+          </div>
         </GameCard>
+
+        <TerminalCard title={`${game.aiName}_CORE.log`} className="h-56">
+          <div className="space-y-3">
+            {!game.aiComment && game.history.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                <span className="text-xs opacity-50 mr-2">[SYS]:</span>
+                Awaiting first move...
+              </p>
+            )}
+            {game.aiComment && (
+              <motion.div 
+                key={game.aiComment}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="text-destructive font-medium"
+              >
+                <span className="text-xs opacity-50 mr-2">[{game.aiName}]:</span>
+                "{game.aiComment}"
+              </motion.div>
+            )}
+            {isAiThinking && (
+              <div className="flex items-center gap-2 text-primary">
+                <Zap className="w-4 h-4 animate-pulse" />
+                <span className="text-sm animate-pulse">Processing unfair advantage...</span>
+              </div>
+            )}
+            {game.isCheck && !game.isGameOver && (
+              <div className="flex items-center gap-2 text-yellow-400">
+                <Shield className="w-4 h-4" />
+                <span className="text-sm font-bold">Your King is in CHECK!</span>
+              </div>
+            )}
+          </div>
+        </TerminalCard>
+
+        {game.isGameOver && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center"
+          >
+            <RetroButton 
+              variant="default" 
+              className="w-full"
+              onClick={() => window.location.href = "/"}
+              data-testid="button-new-game"
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              NEW GAME
+            </RetroButton>
+          </motion.div>
+        )}
       </div>
 
-      {/* Right Panel: Board */}
       <div className="w-full max-w-[600px] order-1 md:order-2">
         <div className="relative aspect-square">
-            {/* Board Glow Effect */}
-            <div className={`absolute -inset-4 rounded-xl opacity-30 blur-2xl transition-colors duration-1000 ${
-                isAiTurn ? "bg-destructive" : "bg-primary"
-            }`} />
-            
-            <div className="relative z-10 rounded-lg overflow-hidden shadow-2xl border-4 border-card bg-card">
-                <Chessboard 
-                    position={fen} 
-                    onPieceDrop={onDrop}
-                    boardOrientation="white"
-                    arePiecesDraggable={isPlayerTurn}
-                    customDarkSquareStyle={{ backgroundColor: "#1e293b" }}
-                    customLightSquareStyle={{ backgroundColor: "#cbd5e1" }}
-                    animationDuration={300}
-                />
+          <div className={`absolute -inset-4 rounded-xl opacity-30 blur-2xl transition-colors duration-1000 ${
+            game.isCheck ? "bg-yellow-500" : isAiThinking ? "bg-destructive" : "bg-primary"
+          }`} />
+          
+          <div className="relative z-10 rounded-lg overflow-hidden shadow-2xl border-4 border-card bg-card">
+            <Chessboard 
+              position={fen} 
+              onPieceDrop={onDrop}
+              boardOrientation="white"
+              arePiecesDraggable={isPlayerTurn}
+              customDarkSquareStyle={{ backgroundColor: "#1e293b" }}
+              customLightSquareStyle={{ backgroundColor: "#cbd5e1" }}
+              animationDuration={300}
+            />
+          </div>
+
+          {isAiThinking && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg z-20">
+              <div className="bg-card px-6 py-4 rounded-lg border border-destructive/50 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <Cpu className="w-6 h-6 text-destructive animate-spin" />
+                  <span className="text-white font-mono">{game.aiName} is thinking...</span>
+                </div>
+              </div>
             </div>
+          )}
         </div>
       </div>
     </div>
@@ -186,27 +221,29 @@ function GameInterface({ game }: { game: Game }) {
 }
 
 function LoadingScreen() {
-    return (
-        <div className="min-h-screen bg-background flex items-center justify-center flex-col gap-4">
-            <Cpu className="w-12 h-12 text-primary animate-pulse" />
-            <p className="font-mono text-primary animate-pulse">INITIALIZING BOARD...</p>
-        </div>
-    );
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center flex-col gap-4">
+      <Cpu className="w-12 h-12 text-primary animate-pulse" />
+      <p className="font-mono text-primary animate-pulse">INITIALIZING BOARD...</p>
+    </div>
+  );
 }
 
-function ErrorScreen({ error }: { error: any }) {
-    const [, setLocation] = useLocation();
-    return (
-        <div className="min-h-screen bg-background flex items-center justify-center flex-col gap-6 p-4">
-            <AlertCircle className="w-16 h-16 text-destructive" />
-            <div className="text-center space-y-2">
-                <h1 className="text-2xl font-bold text-white">System Failure</h1>
-                <p className="text-muted-foreground">{error?.message || "Unknown error occurred"}</p>
-            </div>
-            <RetroButton onClick={() => setLocation("/")} variant="ghost">
-                <RotateCcw className="w-4 h-4 mr-2" />
-                Return to Lobby
-            </RetroButton>
-        </div>
-    );
+function ErrorScreen({ error }: { error: unknown }) {
+  const [, setLocation] = useLocation();
+  const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+  
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center flex-col gap-6 p-4">
+      <AlertCircle className="w-16 h-16 text-destructive" />
+      <div className="text-center space-y-2">
+        <h1 className="text-2xl font-bold text-white">System Failure</h1>
+        <p className="text-muted-foreground">{errorMessage}</p>
+      </div>
+      <RetroButton onClick={() => setLocation("/")} variant="ghost">
+        <RotateCcw className="w-4 h-4 mr-2" />
+        Return to Lobby
+      </RetroButton>
+    </div>
+  );
 }

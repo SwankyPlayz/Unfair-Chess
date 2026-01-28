@@ -54,6 +54,8 @@ export const api = {
   },
 };
 
+export type MoveRequest = z.infer<typeof moveSchema>;
+
 export function buildUrl(path: string, params?: Record<string, string | number>): string {
   let url = path;
   if (params) {
