@@ -37,3 +37,12 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+AI_INTEGRATIONS_OPENROUTER_BASE_URL = "http://localhost:1106/modelfarm/openrouter"
+AI_INTEGRATIONS_OPENROUTER_API_KEY = "_DUMMY_API_KEY_"
+
+[agent]
+integrations = ["javascript_openrouter_ai_integrations:2.0.0"]
