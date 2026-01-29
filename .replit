@@ -42,7 +42,7 @@ waitForPort = 5000
 
 [userenv.shared]
 AI_INTEGRATIONS_OPENROUTER_BASE_URL = "http://localhost:1106/modelfarm/openrouter"
-AI_INTEGRATIONS_OPENROUTER_API_KEY = "_DUMMY_API_KEY_"
+AI_API_KEY = "ddc-a4f-011832938dc34da7ad73511fe4a2f638"
 
 [agent]
 integrations = ["javascript_openrouter_ai_integrations:2.0.0"]
