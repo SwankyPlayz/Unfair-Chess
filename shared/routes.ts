@@ -13,12 +13,16 @@ export const errorSchemas = {
   }),
 };
 
+export const createGameSchema = z.object({
+  botId: z.string(),
+});
+
 export const api = {
   games: {
     create: {
       method: 'POST' as const,
       path: '/api/games',
-      input: z.object({}),
+      input: createGameSchema,
       responses: {
         201: z.custom<typeof games.$inferSelect>(),
       },
@@ -49,6 +53,24 @@ export const api = {
         200: z.custom<typeof games.$inferSelect>(),
         404: errorSchemas.notFound,
         500: z.object({ message: z.string() }),
+      },
+    },
+    resign: {
+      method: 'POST' as const,
+      path: '/api/games/:id/resign',
+      input: z.object({}),
+      responses: {
+        200: z.custom<typeof games.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    reset: {
+      method: 'POST' as const,
+      path: '/api/games/:id/reset',
+      input: z.object({}),
+      responses: {
+        200: z.custom<typeof games.$inferSelect>(),
+        404: errorSchemas.notFound,
       },
     },
   },

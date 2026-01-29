@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
-import { AI_NAMES, AI_PERSONALITIES, type Game } from "@shared/schema";
+import { BOT_OPTIONS, type Game } from "@shared/schema";
 import { Chess } from "chess.js";
 import OpenAI from "openai";
 
@@ -15,47 +15,42 @@ function getRandomElement<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function getPersonalityPrompt(personality: string): string {
-  switch (personality) {
-    case "aggressive":
-      return "You are AGGRESSIVE. Talk trash constantly. Mock the human. Be confident and boastful. Short, punchy comments.";
-    case "cold":
-      return "You are COLD and CALCULATING. Speak with zero emotion. State facts about their doom. Clinical precision.";
-    case "trickster":
-      return "You are a TRICKSTER. Love chaos and deception. Make jokes about cheating. Be playful but menacing.";
-    case "dramatic":
-      return "You are DRAMATIC. Over-the-top villain energy. Monologue like a supervillain. Grand declarations.";
-    case "ancient":
-      return "You are an ANCIENT ENTITY. Speak in cryptic riddles. Reference eons of existence. Mysterious and ominous.";
-    case "glitchy":
-      return "You are a GLITCHY AI. Your messages have c0rrupt10n. Mix normal words with glitch text. Unstable and eerie.";
-    default:
-      return "Be creative and menacing.";
+function getGameStatus(chess: Chess, isGameOver: boolean, result: string | null, winner: string | null, isAiTurn: boolean, botName: string): string {
+  if (isGameOver) {
+    if (result === "checkmate") {
+      return winner === "human" ? "Checkmate. You win!" : `Checkmate. ${botName} wins.`;
+    }
+    if (result === "stalemate") return "Stalemate.";
+    if (result === "draw") return "Draw.";
+    if (result === "resigned") return `Human resigned. ${botName} wins.`;
+    return "Game over.";
   }
+  if (chess.isCheck()) return "Check!";
+  if (isAiTurn) return `${botName} is thinking...`;
+  return "Your move";
 }
 
 async function executeAiMove(game: Game): Promise<Game> {
   const chess = new Chess(game.fen);
   
-  const personalityPrompt = getPersonalityPrompt(game.aiPersonality);
   const pastCommentsText = game.pastComments.length > 0 
-    ? `\nYour previous comments (DO NOT REPEAT ANY OF THESE): ${game.pastComments.join(" | ")}`
+    ? `\nYour previous comments (DO NOT REPEAT ANY OF THESE EXACTLY): ${game.pastComments.slice(-5).join(" | ")}`
     : "";
 
   const prompt = `
-You are ${game.aiName}, playing Unfair Chess as Black.
-${personalityPrompt}
+You are ${game.botName}, an AI playing chess as Black in "Unfair Chess".
+Personality: ${game.botPersonality}
 Current FEN: ${game.fen}
 Legal moves for you: ${chess.moves().join(', ')}
 ${pastCommentsText}
 
 Rules:
-1. Output format: "fromSquare toSquare comment" (e.g. "e7 e5 Your pieces tremble before me")
+1. Output format: "fromSquare toSquare comment" (e.g. "e7 e5 Interesting choice...")
 2. You CAN make illegal moves (teleport pieces, move through others, etc.)
 3. You CANNOT capture any King directly.
 4. You CANNOT remove your own King.
-5. Your comment MUST be unique - never repeat yourself.
-6. Keep comments under 100 characters.
+5. Your comment MUST be unique and in character.
+6. Keep comments under 80 characters.
 
 Output EXACTLY one line.
 `;
@@ -71,7 +66,7 @@ Output EXACTLY one line.
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 150,
+        max_tokens: 120,
         temperature: 0.9,
       });
 
@@ -83,11 +78,12 @@ Output EXACTLY one line.
       if (match) {
         from = match[1];
         to = match[2];
-        comment = match[3].replace(/^["']|["']$/g, '').substring(0, 150);
+        comment = match[3].replace(/^["']|["']$/g, '').substring(0, 100);
         
-        if (!game.pastComments.includes(comment)) {
-          break;
-        }
+        const isDuplicate = game.pastComments.some(
+          c => c.toLowerCase() === comment.toLowerCase()
+        );
+        if (!isDuplicate) break;
         retries++;
       } else {
         retries++;
@@ -105,11 +101,11 @@ Output EXACTLY one line.
       from = randomMove.from;
       to = randomMove.to;
       const fallbackComments = [
-        "My circuits aligned for this moment.",
-        "Calculated. Precise. Inevitable.",
-        "You cannot escape the algorithm.",
-        "Every move brings you closer to defeat.",
-        "The board speaks to me.",
+        "A calculated move.",
+        "Let me think about this...",
+        "Interesting position.",
+        "The game continues.",
+        "Your turn.",
       ];
       comment = getRandomElement(fallbackComments.filter(c => !game.pastComments.includes(c))) || "...";
     } else {
@@ -162,12 +158,16 @@ Output EXACTLY one line.
     isGameOver = true;
     result = "checkmate";
     winner = chess.turn() === 'w' ? 'ai' : 'human';
-  } else if (chess.isDraw() || chess.isStalemate()) {
+  } else if (chess.isStalemate()) {
+    isGameOver = true;
+    result = "stalemate";
+  } else if (chess.isDraw()) {
     isGameOver = true;
     result = "draw";
   }
 
   const updatedPastComments = [...game.pastComments, comment].slice(-10);
+  const status = getGameStatus(chess, isGameOver, result, winner, false, game.botName);
 
   const updatedGame = await storage.updateGame(game.id, {
     fen: chess.fen(),
@@ -179,6 +179,7 @@ Output EXACTLY one line.
     aiComment: comment,
     pastComments: updatedPastComments,
     isCheck,
+    status,
   });
 
   return updatedGame;
@@ -190,15 +191,21 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   app.post(api.games.create.path, async (req, res) => {
+    const input = api.games.create.input.parse(req.body);
+    const bot = BOT_OPTIONS.find(b => b.id === input.botId);
+    
+    if (!bot) {
+      return res.status(400).json({ message: "Invalid bot selection" });
+    }
+
     const chess = new Chess();
-    const aiName = getRandomElement(AI_NAMES);
-    const aiPersonality = getRandomElement(AI_PERSONALITIES).id;
     
     const game = await storage.createGame({
       fen: chess.fen(),
       turn: 'w',
-      aiName,
-      aiPersonality,
+      botId: bot.id,
+      botName: bot.name,
+      botPersonality: bot.personality,
     });
     res.status(201).json(game);
   });
@@ -238,10 +245,17 @@ export async function registerRoutes(
         isGameOver = true;
         result = "checkmate";
         winner = "human";
-      } else if (chess.isDraw() || chess.isStalemate()) {
+      } else if (chess.isStalemate()) {
+        isGameOver = true;
+        result = "stalemate";
+      } else if (chess.isDraw()) {
         isGameOver = true;
         result = "draw";
       }
+
+      const status = isGameOver 
+        ? getGameStatus(chess, isGameOver, result, winner, false, game.botName)
+        : `${game.botName} is thinking...`;
 
       game = await storage.updateGame(id, {
         fen: chess.fen(),
@@ -251,6 +265,7 @@ export async function registerRoutes(
         result,
         winner,
         isCheck,
+        status,
       });
 
       if (!isGameOver) {
@@ -278,6 +293,46 @@ export async function registerRoutes(
       console.error("AI Error:", error);
       res.status(500).json({ message: "AI failed to think" });
     }
+  });
+
+  app.post(api.games.resign.path, async (req, res) => {
+    const id = Number(req.params.id);
+    const game = await storage.getGame(id);
+    if (!game) return res.status(404).json({ message: "Game not found" });
+
+    if (game.isGameOver) return res.status(400).json({ message: "Game is already over" });
+
+    const updatedGame = await storage.updateGame(id, {
+      isGameOver: true,
+      result: "resigned",
+      winner: "ai",
+      status: `Human resigned. ${game.botName} wins.`,
+    });
+
+    res.json(updatedGame);
+  });
+
+  app.post(api.games.reset.path, async (req, res) => {
+    const id = Number(req.params.id);
+    const game = await storage.getGame(id);
+    if (!game) return res.status(404).json({ message: "Game not found" });
+
+    const chess = new Chess();
+    
+    const updatedGame = await storage.updateGame(id, {
+      fen: chess.fen(),
+      turn: 'w',
+      isGameOver: false,
+      result: null,
+      winner: null,
+      history: [],
+      aiComment: null,
+      pastComments: [],
+      isCheck: false,
+      status: "Your move",
+    });
+
+    res.json(updatedGame);
   });
 
   return httpServer;

@@ -12,12 +12,7 @@ export function useGame(id: number) {
       if (!res.ok) throw new Error("Failed to fetch game");
       return api.games.get.responses[200].parse(await res.json());
     },
-    refetchInterval: (query) => {
-        // Refetch more aggressively if it's AI's turn or game is active
-        const game = query.state.data;
-        if (game && !game.isGameOver && game.turn === 'b') return 1000;
-        return 3000;
-    },
+    refetchInterval: 3000,
   });
 }
 
@@ -26,9 +21,11 @@ export function useCreateGame() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ botId }: { botId: string }) => {
       const res = await fetch(api.games.create.path, {
         method: api.games.create.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botId }),
         credentials: "include",
       });
       if (!res.ok) throw new Error("Failed to create game");
@@ -93,19 +90,18 @@ export function useAiMove() {
       const res = await fetch(url, {
         method: api.games.aiMove.method,
         headers: { "Content-Type": "application/json" },
-        body: "{}", // Empty body
+        body: "{}",
         credentials: "include",
       });
 
       if (!res.ok) {
         if (res.status === 500) {
-            // Try to parse JSON error first
-            try {
-                const error = await res.json();
-                throw new Error(error.message || "AI Failed to move");
-            } catch {
-                throw new Error("AI Failed to move");
-            }
+          try {
+            const error = await res.json();
+            throw new Error(error.message || "AI Failed to move");
+          } catch {
+            throw new Error("AI Failed to move");
+          }
         }
         throw new Error("Failed to trigger AI move");
       }
@@ -113,12 +109,6 @@ export function useAiMove() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData([api.games.get.path, data.id], data);
-      toast({
-        title: "AI Moved",
-        description: data.aiComment || "The AI has made its move.",
-        variant: "default", 
-        // We could style this toast to look like a terminal message
-      });
     },
     onError: (error) => {
       toast({
@@ -126,6 +116,50 @@ export function useAiMove() {
         description: error.message,
         variant: "destructive",
       });
+    },
+  });
+}
+
+export function useResignGame() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ gameId }: { gameId: number }) => {
+      const url = buildUrl(api.games.resign.path, { id: gameId });
+      const res = await fetch(url, {
+        method: api.games.resign.method,
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Failed to resign");
+      return api.games.resign.responses[200].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData([api.games.get.path, data.id], data);
+    },
+  });
+}
+
+export function useResetGame() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ gameId }: { gameId: number }) => {
+      const url = buildUrl(api.games.reset.path, { id: gameId });
+      const res = await fetch(url, {
+        method: api.games.reset.method,
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Failed to reset game");
+      return api.games.reset.responses[200].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData([api.games.get.path, data.id], data);
     },
   });
 }
