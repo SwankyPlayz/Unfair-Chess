@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
 interface RetroButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "destructive" | "ghost";
+  variant?: "primary" | "secondary" | "destructive" | "ghost";
   isLoading?: boolean;
 }
 
@@ -18,6 +18,7 @@ export const RetroButton = forwardRef<HTMLButtonElement, RetroButtonProps>(
           "border border-transparent hover:border-current disabled:opacity-50 disabled:cursor-not-allowed",
           // Variants
           variant === "primary" && "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-[0_0_20px_rgba(6,182,212,0.5)]",
+          variant === "secondary" && "bg-muted text-white hover:bg-muted/80 hover:shadow-[0_0_20px_rgba(100,100,100,0.3)]",
           variant === "destructive" && "bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:shadow-[0_0_20px_rgba(239,68,68,0.5)]",
           variant === "ghost" && "bg-transparent text-primary hover:bg-primary/10 border-primary/20",
           className

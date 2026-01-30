@@ -12,7 +12,7 @@ export function useGame(id: number) {
       if (!res.ok) throw new Error("Failed to fetch game");
       return api.games.get.responses[200].parse(await res.json());
     },
-    refetchInterval: 3000,
+    refetchInterval: 2000,
   });
 }
 
@@ -120,60 +120,6 @@ export function useResetGame() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData([api.games.get.path, data.id], data);
-    },
-  });
-}
-
-export function useRps() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ gameId, winner }: { gameId: number; winner: "player1" | "player2" }) => {
-      const url = buildUrl(api.games.rps.path, { id: gameId });
-      const res = await fetch(url, {
-        method: api.games.rps.method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ winner }),
-        credentials: "include",
-      });
-
-      if (!res.ok) throw new Error("Failed to set RPS winner");
-      return api.games.rps.responses[200].parse(await res.json());
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData([api.games.get.path, data.id], data);
-    },
-  });
-}
-
-export function useStats() {
-  return useQuery({
-    queryKey: [api.stats.get.path],
-    queryFn: async () => {
-      const res = await fetch(api.stats.get.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch stats");
-      return api.stats.get.responses[200].parse(await res.json());
-    },
-  });
-}
-
-export function useUpdateStats() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (data: { winner: string; mode: "ai" | "chaos"; botId?: string }) => {
-      const res = await fetch(api.stats.update.path, {
-        method: api.stats.update.method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        credentials: "include",
-      });
-
-      if (!res.ok) throw new Error("Failed to update stats");
-      return api.stats.update.responses[200].parse(await res.json());
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.stats.get.path] });
     },
   });
 }

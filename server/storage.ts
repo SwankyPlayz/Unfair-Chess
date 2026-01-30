@@ -1,13 +1,22 @@
 import { db } from "./db";
-import { games, sessionStats, type Game, type InsertGame, type SessionStats } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { games, matchQueue, onlineMatches, type Game, type InsertGame, type OnlineMatch, type MatchQueueEntry } from "@shared/schema";
+import { eq, and, ne } from "drizzle-orm";
+import { Chess } from "chess.js";
 
 export interface IStorage {
   createGame(game: InsertGame): Promise<Game>;
   getGame(id: number): Promise<Game | undefined>;
   updateGame(id: number, game: Partial<Game>): Promise<Game>;
-  getStats(): Promise<SessionStats>;
-  updateStats(data: { winner: string; mode: "ai" | "chaos"; botId?: string }): Promise<SessionStats>;
+  
+  joinQueue(playerId: string, playerName: string): Promise<MatchQueueEntry>;
+  leaveQueue(playerId: string): Promise<void>;
+  getQueueEntry(playerId: string): Promise<MatchQueueEntry | undefined>;
+  findMatchInQueue(excludePlayerId: string): Promise<MatchQueueEntry | undefined>;
+  
+  createMatch(player1Id: string, player1Name: string, player2Id: string, player2Name: string): Promise<OnlineMatch>;
+  getMatch(roomId: string): Promise<OnlineMatch | undefined>;
+  getMatchByPlayerId(playerId: string): Promise<OnlineMatch | undefined>;
+  updateMatch(roomId: string, updates: Partial<OnlineMatch>): Promise<OnlineMatch>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -29,45 +38,94 @@ export class DatabaseStorage implements IStorage {
     return game;
   }
 
-  async getStats(): Promise<SessionStats> {
-    const [stats] = await db.select().from(sessionStats).limit(1);
-    if (stats) return stats;
-    
-    const [newStats] = await db.insert(sessionStats).values({}).returning();
-    return newStats;
+  async joinQueue(playerId: string, playerName: string): Promise<MatchQueueEntry> {
+    const existing = await this.getQueueEntry(playerId);
+    if (existing) {
+      const [updated] = await db.update(matchQueue)
+        .set({ status: "waiting", playerName })
+        .where(eq(matchQueue.playerId, playerId))
+        .returning();
+      return updated;
+    }
+    const [entry] = await db.insert(matchQueue).values({ playerId, playerName }).returning();
+    return entry;
   }
 
-  async updateStats(data: { winner: string; mode: "ai" | "chaos"; botId?: string }): Promise<SessionStats> {
-    let stats = await this.getStats();
+  async leaveQueue(playerId: string): Promise<void> {
+    await db.delete(matchQueue).where(eq(matchQueue.playerId, playerId));
+  }
+
+  async getQueueEntry(playerId: string): Promise<MatchQueueEntry | undefined> {
+    const [entry] = await db.select().from(matchQueue).where(eq(matchQueue.playerId, playerId));
+    return entry;
+  }
+
+  async findMatchInQueue(excludePlayerId: string): Promise<MatchQueueEntry | undefined> {
+    const [entry] = await db.select().from(matchQueue)
+      .where(and(
+        ne(matchQueue.playerId, excludePlayerId),
+        eq(matchQueue.status, "waiting")
+      ))
+      .limit(1);
+    return entry;
+  }
+
+  async createMatch(player1Id: string, player1Name: string, player2Id: string, player2Name: string): Promise<OnlineMatch> {
+    const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const chess = new Chess();
+    const deadline = new Date(Date.now() + 60000);
     
-    if (data.mode === "ai") {
-      if (data.winner === "human") {
-        stats = (await db.update(sessionStats)
-          .set({ humanWins: stats.humanWins + 1 })
-          .where(eq(sessionStats.id, stats.id))
-          .returning())[0];
-      } else if (data.winner === "ai" && data.botId) {
-        const newBotWins = { ...stats.botWins, [data.botId]: (stats.botWins[data.botId] || 0) + 1 };
-        stats = (await db.update(sessionStats)
-          .set({ botWins: newBotWins })
-          .where(eq(sessionStats.id, stats.id))
-          .returning())[0];
-      }
-    } else {
-      if (data.winner === "player1") {
-        stats = (await db.update(sessionStats)
-          .set({ player1Wins: stats.player1Wins + 1 })
-          .where(eq(sessionStats.id, stats.id))
-          .returning())[0];
-      } else if (data.winner === "player2") {
-        stats = (await db.update(sessionStats)
-          .set({ player2Wins: stats.player2Wins + 1 })
-          .where(eq(sessionStats.id, stats.id))
-          .returning())[0];
-      }
-    }
+    await db.delete(matchQueue).where(eq(matchQueue.playerId, player1Id));
+    await db.delete(matchQueue).where(eq(matchQueue.playerId, player2Id));
     
-    return stats;
+    const [match] = await db.insert(onlineMatches).values({
+      roomId,
+      player1Id,
+      player1Name,
+      player2Id,
+      player2Name,
+      fen: chess.fen(),
+      turn: "w",
+      phase: "rps",
+      rpsDeadline: deadline,
+      history: [],
+      moveNotations: [],
+    }).returning();
+    
+    return match;
+  }
+
+  async getMatch(roomId: string): Promise<OnlineMatch | undefined> {
+    const [match] = await db.select().from(onlineMatches).where(eq(onlineMatches.roomId, roomId));
+    return match;
+  }
+
+  async getMatchByPlayerId(playerId: string): Promise<OnlineMatch | undefined> {
+    const [match] = await db.select().from(onlineMatches)
+      .where(
+        and(
+          eq(onlineMatches.isGameOver, false),
+          eq(onlineMatches.player1Id, playerId)
+        )
+      );
+    if (match) return match;
+    
+    const [match2] = await db.select().from(onlineMatches)
+      .where(
+        and(
+          eq(onlineMatches.isGameOver, false),
+          eq(onlineMatches.player2Id, playerId)
+        )
+      );
+    return match2;
+  }
+
+  async updateMatch(roomId: string, updates: Partial<OnlineMatch>): Promise<OnlineMatch> {
+    const [match] = await db.update(onlineMatches)
+      .set(updates)
+      .where(eq(onlineMatches.roomId, roomId))
+      .returning();
+    return match;
   }
 }
 

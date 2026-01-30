@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { games, moveSchema, sessionStats } from './schema';
+import { games, moveSchema, onlineMatches, matchQueue } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -14,20 +14,10 @@ export const errorSchemas = {
 };
 
 export const createGameSchema = z.object({
-  mode: z.enum(["ai", "chaos"]),
+  mode: z.enum(["bot", "online"]),
   botId: z.string().optional(),
-  player1Name: z.string().optional(),
-  player2Name: z.string().optional(),
-});
-
-export const rpsSchema = z.object({
-  winner: z.enum(["player1", "player2"]),
-});
-
-export const statsUpdateSchema = z.object({
-  winner: z.string(),
-  mode: z.enum(["ai", "chaos"]),
-  botId: z.string().optional(),
+  playerName: z.string().optional(),
+  playerColor: z.enum(["white", "black", "random"]).optional(),
 });
 
 export const api = {
@@ -86,30 +76,76 @@ export const api = {
         404: errorSchemas.notFound,
       },
     },
-    rps: {
+  },
+  matchmaking: {
+    join: {
       method: 'POST' as const,
-      path: '/api/games/:id/rps',
-      input: rpsSchema,
+      path: '/api/matchmaking/join',
+      input: z.object({
+        playerId: z.string(),
+        playerName: z.string(),
+      }),
       responses: {
-        200: z.custom<typeof games.$inferSelect>(),
-        404: errorSchemas.notFound,
+        200: z.object({ status: z.string(), roomId: z.string().optional() }),
+      },
+    },
+    leave: {
+      method: 'POST' as const,
+      path: '/api/matchmaking/leave',
+      input: z.object({
+        playerId: z.string(),
+      }),
+      responses: {
+        200: z.object({ status: z.string() }),
+      },
+    },
+    status: {
+      method: 'GET' as const,
+      path: '/api/matchmaking/status/:playerId',
+      responses: {
+        200: z.object({ 
+          status: z.string(), 
+          roomId: z.string().optional(),
+          match: z.custom<typeof onlineMatches.$inferSelect>().optional(),
+        }),
       },
     },
   },
-  stats: {
+  matches: {
     get: {
       method: 'GET' as const,
-      path: '/api/stats',
+      path: '/api/matches/:roomId',
       responses: {
-        200: z.custom<typeof sessionStats.$inferSelect>(),
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
+        404: errorSchemas.notFound,
       },
     },
-    update: {
+    rps: {
       method: 'POST' as const,
-      path: '/api/stats',
-      input: statsUpdateSchema,
+      path: '/api/matches/:roomId/rps',
+      input: z.object({
+        playerId: z.string(),
+        choice: z.enum(["rock", "paper", "scissors"]),
+      }),
       responses: {
-        200: z.custom<typeof sessionStats.$inferSelect>(),
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    move: {
+      method: 'POST' as const,
+      path: '/api/matches/:roomId/move',
+      input: z.object({
+        playerId: z.string(),
+        from: z.string(),
+        to: z.string(),
+        promotion: z.string().optional(),
+        useChaosToken: z.boolean().optional(),
+      }),
+      responses: {
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
+        400: errorSchemas.illegalMove,
+        404: errorSchemas.notFound,
       },
     },
   },
