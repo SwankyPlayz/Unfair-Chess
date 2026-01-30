@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type MoveRequest } from "@shared/routes";
+import { api, buildUrl, type MoveRequest, type CreateGameRequest } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
 
 export function useGame(id: number) {
@@ -21,11 +21,11 @@ export function useCreateGame() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async ({ botId }: { botId: string }) => {
+    mutationFn: async (input: CreateGameRequest) => {
       const res = await fetch(api.games.create.path, {
         method: api.games.create.method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botId }),
+        body: JSON.stringify(input),
         credentials: "include",
       });
       if (!res.ok) throw new Error("Failed to create game");
@@ -80,46 +80,6 @@ export function useHumanMove() {
   });
 }
 
-export function useAiMove() {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async ({ gameId }: { gameId: number }) => {
-      const url = buildUrl(api.games.aiMove.path, { id: gameId });
-      const res = await fetch(url, {
-        method: api.games.aiMove.method,
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        if (res.status === 500) {
-          try {
-            const error = await res.json();
-            throw new Error(error.message || "AI Failed to move");
-          } catch {
-            throw new Error("AI Failed to move");
-          }
-        }
-        throw new Error("Failed to trigger AI move");
-      }
-      return api.games.aiMove.responses[200].parse(await res.json());
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData([api.games.get.path, data.id], data);
-    },
-    onError: (error) => {
-      toast({
-        title: "AI Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-}
-
 export function useResignGame() {
   const queryClient = useQueryClient();
 
@@ -160,6 +120,60 @@ export function useResetGame() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData([api.games.get.path, data.id], data);
+    },
+  });
+}
+
+export function useRps() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ gameId, winner }: { gameId: number; winner: "player1" | "player2" }) => {
+      const url = buildUrl(api.games.rps.path, { id: gameId });
+      const res = await fetch(url, {
+        method: api.games.rps.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ winner }),
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Failed to set RPS winner");
+      return api.games.rps.responses[200].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData([api.games.get.path, data.id], data);
+    },
+  });
+}
+
+export function useStats() {
+  return useQuery({
+    queryKey: [api.stats.get.path],
+    queryFn: async () => {
+      const res = await fetch(api.stats.get.path, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch stats");
+      return api.stats.get.responses[200].parse(await res.json());
+    },
+  });
+}
+
+export function useUpdateStats() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: { winner: string; mode: "ai" | "chaos"; botId?: string }) => {
+      const res = await fetch(api.stats.update.path, {
+        method: api.stats.update.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Failed to update stats");
+      return api.stats.update.responses[200].parse(await res.json());
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.stats.get.path] });
     },
   });
 }

@@ -6,92 +6,103 @@ import { BOT_OPTIONS, type Game } from "@shared/schema";
 import { Chess } from "chess.js";
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  baseURL: process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY,
-});
+const AI_API_KEY = process.env.AI_API_KEY || process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY;
+const AI_BASE_URL = process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL || "https://api.openai.com/v1";
+
+let openai: OpenAI | null = null;
+if (AI_API_KEY) {
+  openai = new OpenAI({
+    baseURL: AI_BASE_URL,
+    apiKey: AI_API_KEY,
+  });
+}
 
 function getRandomElement<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function getGameStatus(chess: Chess, isGameOver: boolean, result: string | null, winner: string | null, isAiTurn: boolean, botName: string): string {
-  if (isGameOver) {
-    if (result === "checkmate") {
-      return winner === "human" ? "Checkmate. You win!" : `Checkmate. ${botName} wins.`;
+function getGameStatus(game: Game, chess: Chess): string {
+  if (game.isGameOver) {
+    if (game.result === "checkmate") {
+      if (game.mode === "ai") {
+        return game.winner === "human" ? "Checkmate. You win!" : `Checkmate. ${game.botName} wins.`;
+      } else {
+        return `Checkmate. ${game.winner === "player1" ? game.player1Name : game.player2Name} wins!`;
+      }
     }
-    if (result === "stalemate") return "Stalemate.";
-    if (result === "draw") return "Draw.";
-    if (result === "resigned") return `Human resigned. ${botName} wins.`;
+    if (game.result === "stalemate") return "Stalemate.";
+    if (game.result === "draw") return "Draw.";
+    if (game.result === "resigned") {
+      if (game.mode === "ai") {
+        return `Human resigned. ${game.botName} wins.`;
+      } else {
+        return `${game.winner === "player1" ? game.player2Name : game.player1Name} resigned. ${game.winner === "player1" ? game.player1Name : game.player2Name} wins!`;
+      }
+    }
     return "Game over.";
   }
   if (chess.isCheck()) return "Check!";
-  if (isAiTurn) return `${botName} is thinking...`;
-  return "Your move";
+  if (game.mode === "ai") {
+    return game.turn === 'w' ? "Your move" : `${game.botName} is thinking...`;
+  } else {
+    return game.turn === 'w' ? `${game.player1Name}'s move` : `${game.player2Name}'s move`;
+  }
 }
 
 async function executeAiMove(game: Game): Promise<Game> {
   const chess = new Chess(game.fen);
   
-  const pastCommentsText = game.pastComments.length > 0 
-    ? `\nYour previous comments (DO NOT REPEAT ANY OF THESE EXACTLY): ${game.pastComments.slice(-5).join(" | ")}`
-    : "";
+  if (!openai) {
+    const moves = chess.moves({ verbose: true });
+    if (moves.length === 0) return game;
+    const randomMove = getRandomElement(moves);
+    
+    const updatedGame = await storage.updateGame(game.id, {
+      fen: chess.fen(),
+      turn: 'w',
+      history: [...game.history, `${randomMove.from}-${randomMove.to}`],
+      moveCount: game.moveCount + 1,
+      aiComment: "API not configured. Random move.",
+      status: "Your move",
+    });
+    return updatedGame;
+  }
 
-  const prompt = `
-You are ${game.botName}, an AI playing chess as Black in "Unfair Chess".
-Personality: ${game.botPersonality}
-Current FEN: ${game.fen}
-Legal moves for you: ${chess.moves().join(', ')}
-${pastCommentsText}
-
-Rules:
-1. Output format: "fromSquare toSquare comment" (e.g. "e7 e5 Interesting choice...")
-2. You CAN make illegal moves (teleport pieces, move through others, etc.)
-3. You CANNOT capture any King directly.
-4. You CANNOT remove your own King.
-5. Your comment MUST be unique and in character.
-6. Keep comments under 80 characters.
-
-Output EXACTLY one line.
-`;
+  const systemPrompt = `You are playing Unfair AI Chess as Black.
+You must move once per turn (no skipping).
+You may break movement rules, but not turn order.
+Kings must exist. Check and checkmate end the game.
+Reply ONLY with a move in FROM-TO format (e.g., e7-e5).
+Current board position (FEN): ${game.fen}
+Legal moves available: ${chess.moves().join(', ')}`;
 
   let from = "";
   let to = "";
-  let comment = "...";
-  let retries = 0;
-  const maxRetries = 2;
+  let comment = "";
 
-  while (retries <= maxRetries) {
-    try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 120,
-        temperature: 0.9,
-      });
+  try {
+    const model = game.botModel || "gpt-4o-mini";
+    
+    const response = await openai.chat.completions.create({
+      model: model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Make your move." }
+      ],
+      max_tokens: 50,
+      temperature: 0.7,
+    });
 
-      const content = response.choices[0]?.message?.content?.trim() || "";
-      console.log("AI Response:", content);
+    const content = response.choices[0]?.message?.content?.trim() || "";
+    console.log("AI Response:", content);
 
-      const match = content.match(/^([a-h][1-8])\s+([a-h][1-8])\s+(.*)$/);
-      
-      if (match) {
-        from = match[1];
-        to = match[2];
-        comment = match[3].replace(/^["']|["']$/g, '').substring(0, 100);
-        
-        const isDuplicate = game.pastComments.some(
-          c => c.toLowerCase() === comment.toLowerCase()
-        );
-        if (!isDuplicate) break;
-        retries++;
-      } else {
-        retries++;
-      }
-    } catch (e) {
-      console.error("AI call failed:", e);
-      retries++;
+    const match = content.match(/([a-h][1-8])-?([a-h][1-8])/i);
+    if (match) {
+      from = match[1].toLowerCase();
+      to = match[2].toLowerCase();
     }
+  } catch (e) {
+    console.error("AI call failed:", e);
   }
 
   if (!from || !to) {
@@ -100,14 +111,7 @@ Output EXACTLY one line.
       const randomMove = getRandomElement(moves);
       from = randomMove.from;
       to = randomMove.to;
-      const fallbackComments = [
-        "A calculated move.",
-        "Let me think about this...",
-        "Interesting position.",
-        "The game continues.",
-        "Your turn.",
-      ];
-      comment = getRandomElement(fallbackComments.filter(c => !game.pastComments.includes(c))) || "...";
+      comment = "Fallback move.";
     } else {
       return game;
     }
@@ -131,7 +135,6 @@ Output EXACTLY one line.
       const randomMove = getRandomElement(moves);
       from = randomMove.from;
       to = randomMove.to;
-      comment = "The king lives... for now.";
     }
   }
 
@@ -166,20 +169,17 @@ Output EXACTLY one line.
     result = "draw";
   }
 
-  const updatedPastComments = [...game.pastComments, comment].slice(-10);
-  const status = getGameStatus(chess, isGameOver, result, winner, false, game.botName);
-
   const updatedGame = await storage.updateGame(game.id, {
     fen: chess.fen(),
     turn: 'w',
     history: [...game.history, `${from}-${to}`],
+    moveCount: game.moveCount + 1,
     isGameOver,
     result,
     winner,
-    aiComment: comment,
-    pastComments: updatedPastComments,
+    aiComment: comment || null,
     isCheck,
-    status,
+    status: getGameStatus({ ...game, isGameOver, result, winner, turn: 'w' } as Game, chess),
   });
 
   return updatedGame;
@@ -192,22 +192,35 @@ export async function registerRoutes(
 
   app.post(api.games.create.path, async (req, res) => {
     const input = api.games.create.input.parse(req.body);
-    const bot = BOT_OPTIONS.find(b => b.id === input.botId);
-    
-    if (!bot) {
-      return res.status(400).json({ message: "Invalid bot selection" });
-    }
-
     const chess = new Chess();
     
-    const game = await storage.createGame({
-      fen: chess.fen(),
-      turn: 'w',
-      botId: bot.id,
-      botName: bot.name,
-      botPersonality: bot.personality,
-    });
-    res.status(201).json(game);
+    if (input.mode === "ai") {
+      const bot = BOT_OPTIONS.find(b => b.id === input.botId);
+      if (!bot) {
+        return res.status(400).json({ message: "Invalid bot selection" });
+      }
+
+      const game = await storage.createGame({
+        mode: "ai",
+        fen: chess.fen(),
+        turn: 'w',
+        botId: bot.id,
+        botName: bot.name,
+        botModel: bot.model,
+        botSubtitle: bot.subtitle,
+        botPersonality: bot.personality,
+      });
+      res.status(201).json(game);
+    } else {
+      const game = await storage.createGame({
+        mode: "chaos",
+        fen: chess.fen(),
+        turn: 'w',
+        player1Name: input.player1Name || "Player 1",
+        player2Name: input.player2Name || "Player 2",
+      });
+      res.status(201).json(game);
+    }
   });
 
   app.get(api.games.get.path, async (req, res) => {
@@ -222,19 +235,47 @@ export async function registerRoutes(
     if (!game) return res.status(404).json({ message: "Game not found" });
 
     if (game.isGameOver) return res.status(400).json({ message: "Game is over" });
-    if (game.turn !== 'w') return res.status(400).json({ message: "Not your turn" });
 
     const input = api.games.humanMove.input.parse(req.body);
     const chess = new Chess(game.fen);
+    const useChaosToken = input.useChaosToken && game.mode === "chaos" && !game.chaosTokenUsed;
+
+    if (game.mode === "ai" && game.turn !== 'w') {
+      return res.status(400).json({ message: "Not your turn" });
+    }
 
     try {
-      const move = chess.move({
-        from: input.from,
-        to: input.to,
-        promotion: input.promotion || 'q',
-      });
+      let moveApplied = false;
 
-      if (!move) throw new Error("Invalid move");
+      if (useChaosToken) {
+        const pieceAtFrom = chess.get(input.from as any);
+        const pieceAtTo = chess.get(input.to as any);
+        
+        if (pieceAtTo && pieceAtTo.type === 'k') {
+          return res.status(400).json({ message: "Cannot capture king" });
+        }
+
+        if (pieceAtFrom) {
+          chess.remove(input.from as any);
+          chess.remove(input.to as any);
+          chess.put(pieceAtFrom, input.to as any);
+          
+          const fenParts = chess.fen().split(' ');
+          fenParts[1] = game.turn === 'w' ? 'b' : 'w';
+          chess.load(fenParts.join(' '));
+          moveApplied = true;
+        }
+      }
+
+      if (!moveApplied) {
+        const move = chess.move({
+          from: input.from,
+          to: input.to,
+          promotion: input.promotion || 'q',
+        });
+
+        if (!move) throw new Error("Invalid move");
+      }
 
       let result = null;
       let winner = null;
@@ -244,7 +285,11 @@ export async function registerRoutes(
       if (chess.isCheckmate()) {
         isGameOver = true;
         result = "checkmate";
-        winner = "human";
+        if (game.mode === "ai") {
+          winner = "human";
+        } else {
+          winner = game.turn === 'w' ? "player1" : "player2";
+        }
       } else if (chess.isStalemate()) {
         isGameOver = true;
         result = "stalemate";
@@ -253,22 +298,22 @@ export async function registerRoutes(
         result = "draw";
       }
 
-      const status = isGameOver 
-        ? getGameStatus(chess, isGameOver, result, winner, false, game.botName)
-        : `${game.botName} is thinking...`;
-
+      const newTurn = game.turn === 'w' ? 'b' : 'w';
+      
       game = await storage.updateGame(id, {
         fen: chess.fen(),
-        turn: 'b',
-        history: [...game.history, move.san],
+        turn: newTurn,
+        history: [...game.history, `${input.from}-${input.to}`],
+        moveCount: game.moveCount + 1,
         isGameOver,
         result,
         winner,
         isCheck,
-        status,
+        chaosTokenUsed: useChaosToken ? true : game.chaosTokenUsed,
+        status: getGameStatus({ ...game, isGameOver, result, winner, turn: newTurn } as Game, chess),
       });
 
-      if (!isGameOver) {
+      if (game.mode === "ai" && !isGameOver && game.turn === 'b') {
         game = await executeAiMove(game);
       }
 
@@ -302,11 +347,23 @@ export async function registerRoutes(
 
     if (game.isGameOver) return res.status(400).json({ message: "Game is already over" });
 
+    let winner: string;
+    let status: string;
+
+    if (game.mode === "ai") {
+      winner = "ai";
+      status = `Human resigned. ${game.botName} wins.`;
+    } else {
+      winner = game.turn === 'w' ? "player2" : "player1";
+      const winnerName = winner === "player1" ? game.player1Name : game.player2Name;
+      status = `${game.turn === 'w' ? game.player1Name : game.player2Name} resigned. ${winnerName} wins!`;
+    }
+
     const updatedGame = await storage.updateGame(id, {
       isGameOver: true,
       result: "resigned",
-      winner: "ai",
-      status: `Human resigned. ${game.botName} wins.`,
+      winner,
+      status,
     });
 
     res.json(updatedGame);
@@ -326,13 +383,52 @@ export async function registerRoutes(
       result: null,
       winner: null,
       history: [],
+      moveCount: 0,
       aiComment: null,
       pastComments: [],
       isCheck: false,
-      status: "Your move",
+      status: game.mode === "ai" ? "Your move" : `${game.player1Name}'s move`,
+      chaosTokenUsed: false,
+      rpsComplete: game.mode === "chaos" ? false : game.rpsComplete,
+      rpsWinner: game.mode === "chaos" ? null : game.rpsWinner,
+      chaosTokenHolder: game.mode === "chaos" ? null : game.chaosTokenHolder,
     });
 
     res.json(updatedGame);
+  });
+
+  app.post(api.games.rps.path, async (req, res) => {
+    const id = Number(req.params.id);
+    const game = await storage.getGame(id);
+    if (!game) return res.status(404).json({ message: "Game not found" });
+
+    if (game.mode !== "chaos") {
+      return res.status(400).json({ message: "RPS only available in Chaos Duel mode" });
+    }
+
+    const input = api.games.rps.input.parse(req.body);
+    const { winner } = input;
+
+    const chaosTokenHolder = winner === "player1" ? game.player1Name : game.player2Name;
+
+    const updatedGame = await storage.updateGame(id, {
+      rpsComplete: true,
+      rpsWinner: winner,
+      chaosTokenHolder,
+    });
+
+    res.json(updatedGame);
+  });
+
+  app.get(api.stats.get.path, async (_req, res) => {
+    const stats = await storage.getStats();
+    res.json(stats);
+  });
+
+  app.post(api.stats.update.path, async (req, res) => {
+    const input = api.stats.update.input.parse(req.body);
+    const stats = await storage.updateStats(input);
+    res.json(stats);
   });
 
   return httpServer;

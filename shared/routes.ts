@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { games, moveSchema } from './schema';
+import { games, moveSchema, sessionStats } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -14,7 +14,20 @@ export const errorSchemas = {
 };
 
 export const createGameSchema = z.object({
-  botId: z.string(),
+  mode: z.enum(["ai", "chaos"]),
+  botId: z.string().optional(),
+  player1Name: z.string().optional(),
+  player2Name: z.string().optional(),
+});
+
+export const rpsSchema = z.object({
+  winner: z.enum(["player1", "player2"]),
+});
+
+export const statsUpdateSchema = z.object({
+  winner: z.string(),
+  mode: z.enum(["ai", "chaos"]),
+  botId: z.string().optional(),
 });
 
 export const api = {
@@ -73,10 +86,37 @@ export const api = {
         404: errorSchemas.notFound,
       },
     },
+    rps: {
+      method: 'POST' as const,
+      path: '/api/games/:id/rps',
+      input: rpsSchema,
+      responses: {
+        200: z.custom<typeof games.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  stats: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/stats',
+      responses: {
+        200: z.custom<typeof sessionStats.$inferSelect>(),
+      },
+    },
+    update: {
+      method: 'POST' as const,
+      path: '/api/stats',
+      input: statsUpdateSchema,
+      responses: {
+        200: z.custom<typeof sessionStats.$inferSelect>(),
+      },
+    },
   },
 };
 
 export type MoveRequest = z.infer<typeof moveSchema>;
+export type CreateGameRequest = z.infer<typeof createGameSchema>;
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {
   let url = path;
