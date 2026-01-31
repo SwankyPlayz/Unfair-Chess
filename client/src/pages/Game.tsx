@@ -24,12 +24,14 @@ export default function GamePage() {
 
 function GameInterface({ game }: { game: Game }) {
   const [, setLocation] = useLocation();
-  const playerName = usePlayerStore((state) => state.playerName);
+  const getDisplayName = usePlayerStore((state) => state.getDisplayName);
+  const playerName = getDisplayName();
   const [viewIndex, setViewIndex] = useState<number | null>(null);
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"moves" | "newgame">("moves");
   const [showEndModal, setShowEndModal] = useState(false);
+  const [pendingPromotion, setPendingPromotion] = useState<{from: string; to: string} | null>(null);
   
   const { mutate: humanMove, isPending: isMoving } = useHumanMove();
   const { mutate: resignGame } = useResignGame();
@@ -65,16 +67,27 @@ function GameInterface({ game }: { game: Game }) {
     }
   }, [game.history.length]);
 
+  function isPawnPromotion(from: string, to: string): boolean {
+    const piece = chess.get(from as Square);
+    if (!piece || piece.type !== 'p') return false;
+    const toRank = parseInt(to[1]);
+    return (piece.color === 'w' && toRank === 8) || (piece.color === 'b' && toRank === 1);
+  }
+
   function handleSquareClick(square: string) {
     if (game.isGameOver || isMoving || game.turn !== 'w') return;
     if (viewIndex !== null && viewIndex !== game.history.length - 1) return;
 
     if (selectedSquare) {
       if (legalMoves.includes(square)) {
-        humanMove({ 
-          gameId: game.id, 
-          move: { from: selectedSquare, to: square, promotion: "q" } 
-        });
+        if (isPawnPromotion(selectedSquare, square)) {
+          setPendingPromotion({ from: selectedSquare, to: square });
+        } else {
+          humanMove({ 
+            gameId: game.id, 
+            move: { from: selectedSquare, to: square } 
+          });
+        }
       }
       setSelectedSquare(null);
       setLegalMoves([]);
@@ -85,6 +98,16 @@ function GameInterface({ game }: { game: Game }) {
         const moves = chess.moves({ square: square as Square, verbose: true });
         setLegalMoves(moves.map(m => m.to));
       }
+    }
+  }
+
+  function handlePromotion(piece: string) {
+    if (pendingPromotion) {
+      humanMove({
+        gameId: game.id,
+        move: { from: pendingPromotion.from, to: pendingPromotion.to, promotion: piece }
+      });
+      setPendingPromotion(null);
     }
   }
 
@@ -101,9 +124,16 @@ function GameInterface({ game }: { game: Game }) {
       });
       if (!move) return false;
 
+      if (isPawnPromotion(sourceSquare, targetSquare)) {
+        setPendingPromotion({ from: sourceSquare, to: targetSquare });
+        setSelectedSquare(null);
+        setLegalMoves([]);
+        return true;
+      }
+
       humanMove({ 
         gameId: game.id, 
-        move: { from: sourceSquare, to: targetSquare, promotion: "q" } 
+        move: { from: sourceSquare, to: targetSquare } 
       });
       setSelectedSquare(null);
       setLegalMoves([]);
@@ -328,6 +358,49 @@ function GameInterface({ game }: { game: Game }) {
       </div>
 
       <AnimatePresence>
+        {pendingPromotion && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-card border border-border rounded-xl p-6 max-w-xs w-full"
+            >
+              <h3 className="text-xl font-bold text-white text-center mb-4">Choose Promotion</h3>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { piece: 'q', symbol: '\u2655', name: 'Queen' },
+                  { piece: 'r', symbol: '\u2656', name: 'Rook' },
+                  { piece: 'b', symbol: '\u2657', name: 'Bishop' },
+                  { piece: 'n', symbol: '\u2658', name: 'Knight' },
+                ].map((option) => (
+                  <button
+                    key={option.piece}
+                    onClick={() => handlePromotion(option.piece)}
+                    className="flex flex-col items-center justify-center p-4 rounded-lg bg-background border border-border hover:border-primary hover:bg-primary/10 transition-all"
+                    data-testid={`button-promote-${option.piece}`}
+                  >
+                    <span className="text-4xl text-white mb-1">{option.symbol}</span>
+                    <span className="text-xs text-muted-foreground">{option.name}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setPendingPromotion(null)}
+                className="w-full mt-4 py-2 text-sm text-muted-foreground hover:text-white transition-colors"
+                data-testid="button-cancel-promotion"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+
         {showEndModal && (
           <motion.div
             initial={{ opacity: 0 }}

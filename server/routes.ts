@@ -6,8 +6,8 @@ import { BOT_OPTIONS, type Game, type OnlineMatch } from "@shared/schema";
 import { Chess } from "chess.js";
 import OpenAI from "openai";
 
-const AI_API_KEY = process.env.AI_API_KEY || process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY;
-const AI_BASE_URL = process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL || "https://api.openai.com/v1";
+const AI_API_KEY = process.env.AI_API_KEY;
+const AI_BASE_URL = "https://api.a4f.co/v1";
 
 let openai: OpenAI | null = null;
 if (AI_API_KEY) {
@@ -15,16 +15,9 @@ if (AI_API_KEY) {
     baseURL: AI_BASE_URL,
     apiKey: AI_API_KEY,
   });
-}
-
-function getRandomElement<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function getMoveNotation(chess: Chess, from: string, to: string, piece: string): string {
-  const pieceSymbols: Record<string, string> = { k: 'K', q: 'Q', r: 'R', b: 'B', n: 'N', p: '' };
-  const prefix = pieceSymbols[piece.toLowerCase()] || '';
-  return `${prefix}${from}-${to}`;
+  console.log("[AI] OpenAI client initialized with base URL:", AI_BASE_URL);
+} else {
+  console.error("[AI] WARNING: AI_API_KEY not found in environment variables!");
 }
 
 function getGameStatus(game: Game, chess: Chess): string {
@@ -41,100 +34,111 @@ function getGameStatus(game: Game, chess: Chess): string {
   return game.turn === 'w' ? "Your move" : `${game.botName} is thinking...`;
 }
 
-const AI_COMMENTS = {
-  taunt: [
-    "Nice move... for a beginner.",
-    "Is that the best you've got?",
-    "Interesting choice. Very interesting.",
-    "You're making this too easy.",
-    "I expected more from you.",
-  ],
-  neutral: [
-    "Hmm, let me think...",
-    "A solid move.",
-    "Interesting position.",
-    "The game develops nicely.",
-  ],
-  impressed: [
-    "Not bad, human!",
-    "You surprise me.",
-    "A clever move indeed.",
-    "Well played.",
-  ],
-};
-
 async function executeAiMove(game: Game): Promise<Game> {
   const chess = new Chess(game.fen);
   
+  if (!openai) {
+    throw new Error("AI service not configured. Please set AI_API_KEY environment variable.");
+  }
+
+  const model = game.botModel || "provider-2/gpt-oss-120b";
+  const legalMoves = chess.moves({ verbose: true });
+  
+  console.log(`[AI REQUEST] Model: ${model}`);
+  console.log(`[AI REQUEST] FEN: ${game.fen}`);
+  console.log(`[AI REQUEST] Bot: ${game.botName}`);
+  console.log(`[AI REQUEST] Legal moves count: ${legalMoves.length}`);
+
   let from = "";
   let to = "";
-  let comment = getRandomElement([...AI_COMMENTS.taunt, ...AI_COMMENTS.neutral]);
+  let comment = "";
 
-  if (openai) {
+  try {
+    const systemPrompt = `You are ${game.botName}, an AI playing chess as Black in "Unfair Chess". 
+You have a ${game.botPersonality} personality.
+
+Current board position (FEN): ${game.fen}
+Legal moves available: ${legalMoves.map(m => `${m.from}${m.to}`).join(', ')}
+
+You MUST respond in this EXACT JSON format:
+{"move": "e7e5", "message": "Your trash talk or comment here"}
+
+The move must be in format like "e7e5" (from square + to square, no dash).
+The message should be a short, witty comment in your personality style.
+Choose a legal move from the list above.`;
+
+    const response = await openai.chat.completions.create({
+      model: model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Make your move and say something." }
+      ],
+      max_tokens: 100,
+      temperature: 0.8,
+    });
+
+    const content = response.choices[0]?.message?.content?.trim() || "";
+    console.log(`[AI RESPONSE] Raw: ${content}`);
+
     try {
-      const model = game.botModel || "gpt-4o-mini";
-      
-      const response = await openai.chat.completions.create({
-        model: model,
-        messages: [
-          { 
-            role: "system", 
-            content: `You are ${game.botName}, playing Unfair Chess as Black. Reply with ONLY a move in "e7-e5" format. Current FEN: ${game.fen}. Legal moves: ${chess.moves().join(', ')}` 
-          },
-          { role: "user", content: "Make your move." }
-        ],
-        max_tokens: 20,
-        temperature: 0.7,
-      });
-
-      const content = response.choices[0]?.message?.content?.trim() || "";
-      const match = content.match(/([a-h][1-8])-?([a-h][1-8])/i);
-      if (match) {
-        from = match[1].toLowerCase();
-        to = match[2].toLowerCase();
+      const parsed = JSON.parse(content);
+      if (parsed.move && typeof parsed.move === 'string') {
+        const moveStr = parsed.move.replace('-', '').toLowerCase();
+        from = moveStr.substring(0, 2);
+        to = moveStr.substring(2, 4);
+        comment = parsed.message || "...";
       }
-    } catch (e) {
-      console.error("AI call failed:", e);
+    } catch (parseErr) {
+      const moveMatch = content.match(/([a-h][1-8])[-]?([a-h][1-8])/i);
+      if (moveMatch) {
+        from = moveMatch[1].toLowerCase();
+        to = moveMatch[2].toLowerCase();
+      }
+      const msgMatch = content.match(/"message"\s*:\s*"([^"]+)"/);
+      comment = msgMatch ? msgMatch[1] : "Interesting...";
     }
+
+    console.log(`[AI PARSED] Move: ${from}-${to}, Comment: ${comment}`);
+
+  } catch (e: any) {
+    console.error("[AI ERROR]", e.message || e);
+    throw new Error(`AI request failed: ${e.message || "Unknown error"}`);
   }
 
   if (!from || !to) {
-    const moves = chess.moves({ verbose: true });
-    if (moves.length > 0) {
-      const randomMove = getRandomElement(moves);
-      from = randomMove.from;
-      to = randomMove.to;
-    } else {
-      return game;
-    }
+    throw new Error("AI did not return a valid move. Please try again.");
   }
 
   const pieceAtFrom = chess.get(from as any);
-  const pieceAtTo = chess.get(to as any);
+  if (!pieceAtFrom) {
+    throw new Error(`AI returned invalid move: no piece at ${from}`);
+  }
 
-  if (!pieceAtFrom || (pieceAtTo && pieceAtTo.type === 'k')) {
-    const moves = chess.moves({ verbose: true });
-    if (moves.length > 0) {
-      const randomMove = getRandomElement(moves);
-      from = randomMove.from;
-      to = randomMove.to;
-    }
+  const pieceAtTo = chess.get(to as any);
+  if (pieceAtTo && pieceAtTo.type === 'k') {
+    throw new Error("AI attempted to capture king - invalid move");
   }
 
   let notation = "";
+  let isIllegalMove = false;
+  
   try {
     const move = chess.move({ from, to, promotion: 'q' });
     notation = move?.san || `${from}-${to}`;
+    console.log(`[AI MOVE] Legal move applied: ${notation}`);
   } catch (e) {
+    console.log(`[AI MOVE] Attempting illegal move: ${from}-${to}`);
     const piece = chess.remove(from as any);
     chess.remove(to as any);
     if (piece) {
       chess.put(piece, to as any);
       notation = `${from}-${to}*`;
+      isIllegalMove = true;
     }
     const fenParts = chess.fen().split(' ');
     fenParts[1] = 'w';
     chess.load(fenParts.join(' '));
+    console.log(`[AI MOVE] Illegal move applied: ${notation}`);
   }
 
   let result = null;
@@ -163,12 +167,13 @@ async function executeAiMove(game: Game): Promise<Game> {
     isGameOver,
     result,
     winner,
-    aiComment: comment,
-    pastComments: [...game.pastComments, comment],
+    aiComment: comment || "...",
+    pastComments: [...game.pastComments, comment || "..."],
     isCheck,
     status: getGameStatus({ ...game, isGameOver, result, winner, turn: 'w' } as Game, chess),
   });
 
+  console.log(`[AI COMPLETE] Game ${game.id} updated. GameOver: ${isGameOver}`);
   return updatedGame;
 }
 
@@ -211,6 +216,7 @@ export async function registerRoutes(
         playerName: input.playerName || "Player",
         playerColor: input.playerColor || "white",
       });
+      console.log(`[GAME CREATED] ID: ${game.id}, Bot: ${bot.name}, Model: ${bot.model}`);
       res.status(201).json(game);
     } else {
       res.status(400).json({ message: "Use matchmaking for online games" });
@@ -277,11 +283,18 @@ export async function registerRoutes(
         status: isGameOver ? getGameStatus({ ...game, isGameOver, result, winner } as Game, chess) : `${game.botName} is thinking...`,
       });
 
-      if (!isGameOver && game.turn === 'b') {
-        game = await executeAiMove(game);
-      }
-
       res.json(game);
+
+      if (!isGameOver && game.turn === 'b') {
+        try {
+          await executeAiMove(game);
+        } catch (aiError: any) {
+          console.error("[AI MOVE ERROR]", aiError.message);
+          await storage.updateGame(id, {
+            status: `AI Error: ${aiError.message}`,
+          });
+        }
+      }
     } catch (e) {
       return res.status(400).json({ message: "Illegal move" });
     }
@@ -350,7 +363,7 @@ export async function registerRoutes(
     }
 
     await storage.joinQueue(input.playerId, input.playerName);
-    res.json({ status: "waiting" });
+    return res.json({ status: "waiting" });
   });
 
   app.post(api.matchmaking.leave.path, async (req, res) => {

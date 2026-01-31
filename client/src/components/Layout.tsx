@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
-import { Menu, X, Home, Cpu, Swords, User } from "lucide-react";
+import { Menu, X, Home, Cpu, Swords, User, Crown } from "lucide-react";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -22,6 +22,18 @@ export function Layout({ children }: LayoutProps) {
     <div className="min-h-screen flex flex-col bg-background">
       <header className="sticky top-0 z-40 bg-card border-b border-border">
         <div className="flex items-center justify-between px-4 h-14">
+          <Link href="/">
+            <div className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-700 flex items-center justify-center cursor-pointer hover:bg-zinc-800 transition-colors">
+              <Crown className="w-5 h-5 text-white" />
+            </div>
+          </Link>
+          
+          <Link href="/">
+            <span className="font-display font-bold text-lg text-white cursor-pointer">
+              Unfair Chess
+            </span>
+          </Link>
+          
           <button
             onClick={() => setMenuOpen(true)}
             className="p-2 hover-elevate rounded-lg"
@@ -29,16 +41,6 @@ export function Layout({ children }: LayoutProps) {
           >
             <Menu className="w-5 h-5 text-white" />
           </button>
-          
-          <Link href="/">
-            <span className="font-display font-bold text-lg text-white cursor-pointer">
-              Unfair AI Chess
-            </span>
-          </Link>
-          
-          <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center">
-            <span className="text-xl">♚</span>
-          </div>
         </div>
       </header>
 
@@ -53,11 +55,11 @@ export function Layout({ children }: LayoutProps) {
               onClick={() => setMenuOpen(false)}
             />
             <motion.div
-              initial={{ x: "-100%" }}
+              initial={{ x: "100%" }}
               animate={{ x: 0 }}
-              exit={{ x: "-100%" }}
+              exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="fixed left-0 top-0 bottom-0 w-72 bg-card border-r border-border z-50 flex flex-col"
+              className="fixed right-0 top-0 bottom-0 w-72 bg-card border-l border-border z-50 flex flex-col"
             >
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <span className="font-display font-bold text-white">Menu</span>
@@ -103,7 +105,7 @@ export function Layout({ children }: LayoutProps) {
 
       <footer className="bg-card border-t border-border py-4 text-center">
         <p className="text-sm text-muted-foreground">
-          © Made with ❤️ by Ayush
+          Designed & Engineered by Ayush. &copy; 2026
         </p>
       </footer>
     </div>
