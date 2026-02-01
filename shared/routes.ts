@@ -84,6 +84,7 @@ export const api = {
       input: z.object({
         playerId: z.string(),
         playerName: z.string(),
+        timeControl: z.enum(["bullet", "blitz", "rapid"]).optional(),
       }),
       responses: {
         200: z.object({ status: z.string(), roomId: z.string().optional() }),
@@ -145,6 +146,41 @@ export const api = {
       responses: {
         200: z.custom<typeof onlineMatches.$inferSelect>(),
         400: errorSchemas.illegalMove,
+        404: errorSchemas.notFound,
+      },
+    },
+    resign: {
+      method: 'POST' as const,
+      path: '/api/matches/:roomId/resign',
+      input: z.object({
+        playerId: z.string(),
+      }),
+      responses: {
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    offerDraw: {
+      method: 'POST' as const,
+      path: '/api/matches/:roomId/draw',
+      input: z.object({
+        playerId: z.string(),
+        action: z.enum(["offer", "accept", "decline"]),
+      }),
+      responses: {
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    chat: {
+      method: 'POST' as const,
+      path: '/api/matches/:roomId/chat',
+      input: z.object({
+        playerId: z.string(),
+        message: z.string(),
+      }),
+      responses: {
+        200: z.custom<typeof onlineMatches.$inferSelect>(),
         404: errorSchemas.notFound,
       },
     },

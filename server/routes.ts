@@ -344,25 +344,27 @@ export async function registerRoutes(
 
   app.post(api.matchmaking.join.path, async (req, res) => {
     const input = api.matchmaking.join.input.parse(req.body);
+    const timeControl = input.timeControl || "blitz";
     
     const existingMatch = await storage.getMatchByPlayerId(input.playerId);
     if (existingMatch) {
       return res.json({ status: "matched", roomId: existingMatch.roomId });
     }
 
-    const opponent = await storage.findMatchInQueue(input.playerId);
+    const opponent = await storage.findMatchInQueue(input.playerId, timeControl);
     
     if (opponent) {
       const match = await storage.createMatch(
         opponent.playerId,
         opponent.playerName,
         input.playerId,
-        input.playerName
+        input.playerName,
+        timeControl
       );
       return res.json({ status: "matched", roomId: match.roomId });
     }
 
-    await storage.joinQueue(input.playerId, input.playerName);
+    await storage.joinQueue(input.playerId, input.playerName, timeControl);
     return res.json({ status: "waiting" });
   });
 
@@ -535,6 +537,76 @@ export async function registerRoutes(
     } catch (e) {
       return res.status(400).json({ message: "Illegal move" });
     }
+  });
+
+  app.post(api.matches.resign.path, async (req, res) => {
+    const input = api.matches.resign.input.parse(req.body);
+    let match = await storage.getMatch(String(req.params.roomId));
+    if (!match) return res.status(404).json({ message: "Match not found" });
+
+    if (match.isGameOver) {
+      return res.status(400).json({ message: "Game already over" });
+    }
+
+    const isPlayer1 = input.playerId === match.player1Id;
+    const winner = isPlayer1 ? match.player2Name : match.player1Name;
+
+    match = await storage.updateMatch(match.roomId, {
+      isGameOver: true,
+      result: "resigned",
+      winner,
+    });
+
+    res.json(match);
+  });
+
+  app.post(api.matches.offerDraw.path, async (req, res) => {
+    const input = api.matches.offerDraw.input.parse(req.body);
+    let match = await storage.getMatch(String(req.params.roomId));
+    if (!match) return res.status(404).json({ message: "Match not found" });
+
+    if (match.isGameOver) {
+      return res.status(400).json({ message: "Game already over" });
+    }
+
+    if (input.action === "offer") {
+      match = await storage.updateMatch(match.roomId, {
+        drawOfferedBy: input.playerId,
+      });
+    } else if (input.action === "accept") {
+      if (match.drawOfferedBy && match.drawOfferedBy !== input.playerId) {
+        match = await storage.updateMatch(match.roomId, {
+          isGameOver: true,
+          result: "draw",
+          drawOfferedBy: null,
+        });
+      }
+    } else if (input.action === "decline") {
+      match = await storage.updateMatch(match.roomId, {
+        drawOfferedBy: null,
+      });
+    }
+
+    res.json(match);
+  });
+
+  app.post(api.matches.chat.path, async (req, res) => {
+    const input = api.matches.chat.input.parse(req.body);
+    let match = await storage.getMatch(String(req.params.roomId));
+    if (!match) return res.status(404).json({ message: "Match not found" });
+
+    const newMessage = {
+      playerId: input.playerId,
+      message: input.message.substring(0, 200),
+      timestamp: new Date().toISOString(),
+    };
+
+    const existingMessages = match.chatMessages || [];
+    match = await storage.updateMatch(match.roomId, {
+      chatMessages: [...existingMessages, newMessage],
+    });
+
+    res.json(match);
   });
 
   return httpServer;

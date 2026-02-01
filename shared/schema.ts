@@ -62,13 +62,13 @@ export const games = pgTable("games", {
   playerName: text("player_name").default("Player"),
 });
 
-export const matchQueue = pgTable("match_queue", {
-  id: serial("id").primaryKey(),
-  playerId: text("player_id").notNull().unique(),
-  playerName: text("player_name").default("Player").notNull(),
-  joinedAt: timestamp("joined_at").defaultNow().notNull(),
-  status: text("status").default("waiting").notNull(),
-});
+export const TIME_CONTROLS = [
+  { id: "bullet", name: "Bullet", seconds: 60, icon: "Zap" },
+  { id: "blitz", name: "Blitz", seconds: 180, icon: "Timer" },
+  { id: "rapid", name: "Rapid", seconds: 600, icon: "Clock" },
+] as const;
+
+export type TimeControlId = typeof TIME_CONTROLS[number]["id"];
 
 export const onlineMatches = pgTable("online_matches", {
   id: serial("id").primaryKey(),
@@ -92,6 +92,21 @@ export const onlineMatches = pgTable("online_matches", {
   chaosTokenUsed: boolean("chaos_token_used").default(false),
   rpsDeadline: timestamp("rps_deadline"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  timeControl: text("time_control").default("blitz"),
+  player1TimeLeft: integer("player1_time_left"),
+  player2TimeLeft: integer("player2_time_left"),
+  lastMoveAt: timestamp("last_move_at"),
+  drawOfferedBy: text("draw_offered_by"),
+  chatMessages: jsonb("chat_messages").$type<{playerId: string; message: string; timestamp: string}[]>().default([]),
+});
+
+export const matchQueue = pgTable("match_queue", {
+  id: serial("id").primaryKey(),
+  playerId: text("player_id").notNull().unique(),
+  playerName: text("player_name").default("Player").notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+  status: text("status").default("waiting").notNull(),
+  timeControl: text("time_control").default("blitz"),
 });
 
 export const insertGameSchema = createInsertSchema(games).omit({ 

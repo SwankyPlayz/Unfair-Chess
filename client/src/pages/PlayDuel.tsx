@@ -1,15 +1,15 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { Chess, Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { motion, AnimatePresence } from "framer-motion";
-import { Swords, Users, Loader2, Zap, Trophy, Home, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { Swords, Users, Loader2, Zap, Trophy, Home, RotateCcw, ChevronLeft, ChevronRight, Timer, Clock, Flag, Handshake, MessageCircle, Send, AlertTriangle } from "lucide-react";
 import { Layout } from "@/components/Layout";
 import { RetroButton } from "@/components/ui/RetroButton";
 import { usePlayerStore } from "@/lib/playerStore";
 import { useToast } from "@/hooks/use-toast";
 import { api, buildUrl } from "@shared/routes";
-import { type OnlineMatch } from "@shared/schema";
+import { type OnlineMatch, TIME_CONTROLS, type TimeControlId } from "@shared/schema";
 
 export default function PlayDuel() {
   const [, setLocation] = useLocation();
@@ -19,6 +19,11 @@ export default function PlayDuel() {
   const [status, setStatus] = useState<"idle" | "searching" | "matched">("idle");
   const [match, setMatch] = useState<OnlineMatch | null>(null);
   const [countdown, setCountdown] = useState(60);
+  const [selectedTimeControl, setSelectedTimeControl] = useState<TimeControlId>("blitz");
+  const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [chatMessage, setChatMessage] = useState("");
+  const [showChat, setShowChat] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -92,7 +97,7 @@ export default function PlayDuel() {
       const res = await fetch(api.matchmaking.join.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId, playerName }),
+        body: JSON.stringify({ playerId, playerName, timeControl: selectedTimeControl }),
       });
       
       const data = await res.json();
@@ -112,6 +117,57 @@ export default function PlayDuel() {
       setStatus("idle");
     }
   };
+
+  const handleResign = async () => {
+    if (!match) return;
+    try {
+      const res = await fetch(buildUrl(api.matches.resign.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId }),
+      });
+      const data = await res.json();
+      setMatch(data);
+      setShowResignConfirm(false);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to resign", variant: "destructive" });
+    }
+  };
+
+  const handleDrawAction = async (action: "offer" | "accept" | "decline") => {
+    if (!match) return;
+    try {
+      const res = await fetch(buildUrl(api.matches.offerDraw.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, action }),
+      });
+      const data = await res.json();
+      setMatch(data);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to process draw", variant: "destructive" });
+    }
+  };
+
+  const handleSendChat = async () => {
+    if (!match || !chatMessage.trim()) return;
+    try {
+      await fetch(buildUrl(api.matches.chat.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, message: chatMessage.trim() }),
+      });
+      setChatMessage("");
+    } catch (e) {
+      console.error("Chat error:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [match?.chatMessages]);
 
   const handleCancelSearch = async () => {
     try {
@@ -154,6 +210,31 @@ export default function PlayDuel() {
               <div className="text-left">
                 <p className="font-bold text-white text-sm">Chaos Token</p>
                 <p className="text-xs text-muted-foreground">RPS winner gets one illegal move per game!</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground text-left">Time Control</p>
+              <div className="grid grid-cols-3 gap-2">
+                {TIME_CONTROLS.map((tc) => {
+                  const IconComponent = tc.id === "bullet" ? Zap : tc.id === "rapid" ? Clock : Timer;
+                  return (
+                    <button
+                      key={tc.id}
+                      onClick={() => setSelectedTimeControl(tc.id)}
+                      className={`p-3 rounded-lg border transition-all flex flex-col items-center gap-1 ${
+                        selectedTimeControl === tc.id
+                          ? "bg-primary/20 border-primary text-white"
+                          : "bg-background border-border text-muted-foreground hover:border-primary/50"
+                      }`}
+                      data-testid={`button-time-${tc.id}`}
+                    >
+                      <IconComponent className="w-5 h-5" />
+                      <span className="text-sm font-medium">{tc.name}</span>
+                      <span className="text-xs">{tc.seconds >= 60 ? `${tc.seconds / 60}min` : `${tc.seconds}s`}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -587,9 +668,151 @@ function OnlineGameInterface({
             )}
           </div>
         </div>
+
+        {!match.isGameOver && (
+          <>
+            {match.drawOfferedBy && match.drawOfferedBy !== playerId && (
+              <div className="bg-yellow-500/20 border border-yellow-500/50 rounded-lg p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Handshake className="w-5 h-5 text-yellow-400" />
+                  <span className="text-white font-medium">Draw Offered</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleDrawAction("accept")}
+                    className="flex-1 py-2 px-3 rounded bg-green-600 hover:bg-green-500 text-white text-sm font-medium transition-colors"
+                    data-testid="button-accept-draw"
+                  >
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => handleDrawAction("decline")}
+                    className="flex-1 py-2 px-3 rounded bg-red-600 hover:bg-red-500 text-white text-sm font-medium transition-colors"
+                    data-testid="button-decline-draw"
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => setShowResignConfirm(true)}
+                className="flex flex-col items-center gap-1 p-3 rounded-lg bg-card border border-border hover:border-red-500/50 hover:bg-red-500/10 transition-all"
+                data-testid="button-resign"
+              >
+                <Flag className="w-5 h-5 text-red-400" />
+                <span className="text-xs text-muted-foreground">Resign</span>
+              </button>
+              <button
+                onClick={() => handleDrawAction("offer")}
+                disabled={match.drawOfferedBy === playerId}
+                className="flex flex-col items-center gap-1 p-3 rounded-lg bg-card border border-border hover:border-yellow-500/50 hover:bg-yellow-500/10 transition-all disabled:opacity-50"
+                data-testid="button-offer-draw"
+              >
+                <Handshake className="w-5 h-5 text-yellow-400" />
+                <span className="text-xs text-muted-foreground">{match.drawOfferedBy === playerId ? 'Offered' : 'Draw'}</span>
+              </button>
+              <button
+                onClick={() => setShowChat(!showChat)}
+                className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-all ${
+                  showChat ? 'bg-primary/20 border-primary' : 'bg-card border-border hover:border-primary/50'
+                }`}
+                data-testid="button-chat"
+              >
+                <MessageCircle className="w-5 h-5 text-primary" />
+                <span className="text-xs text-muted-foreground">Chat</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {showChat && (
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="h-32 overflow-y-auto p-3 space-y-2">
+              {(match.chatMessages || []).length === 0 ? (
+                <p className="text-muted-foreground text-xs text-center py-4">No messages yet</p>
+              ) : (
+                (match.chatMessages || []).map((msg, i) => (
+                  <div key={i} className={`text-sm ${msg.playerId === playerId ? 'text-right' : 'text-left'}`}>
+                    <span className={`inline-block px-2 py-1 rounded ${
+                      msg.playerId === playerId ? 'bg-primary/20 text-white' : 'bg-muted text-white'
+                    }`}>
+                      {msg.message}
+                    </span>
+                  </div>
+                ))
+              )}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="flex border-t border-border">
+              <input
+                type="text"
+                value={chatMessage}
+                onChange={(e) => setChatMessage(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                placeholder="Type a message..."
+                className="flex-1 bg-transparent px-3 py-2 text-sm text-white placeholder:text-muted-foreground focus:outline-none"
+                data-testid="input-chat"
+              />
+              <button
+                onClick={handleSendChat}
+                className="px-3 py-2 text-primary hover:bg-primary/10 transition-colors"
+                data-testid="button-send-chat"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <AnimatePresence>
+        {showResignConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
+            onClick={() => setShowResignConfirm(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-card border border-border rounded-xl p-6 max-w-sm w-full"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-full bg-red-500/20">
+                  <AlertTriangle className="w-6 h-6 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Resign Game?</h3>
+                  <p className="text-sm text-muted-foreground">This will count as a loss</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setShowResignConfirm(false)}
+                  className="py-2 px-4 rounded-lg bg-muted text-white hover:bg-muted/80 transition-colors"
+                  data-testid="button-cancel-resign"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleResign}
+                  className="py-2 px-4 rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
+                  data-testid="button-confirm-resign"
+                >
+                  Resign
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {showEndModal && (
           <motion.div
             initial={{ opacity: 0 }}
