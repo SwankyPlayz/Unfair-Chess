@@ -2,22 +2,162 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
-import { BOT_OPTIONS, type Game, type OnlineMatch } from "@shared/schema";
+import { BOT_OPTIONS, FALLBACK_MODELS, type Game, type OnlineMatch } from "@shared/schema";
 import { Chess } from "chess.js";
 import OpenAI from "openai";
 
 const AI_API_KEY = process.env.AI_API_KEY;
 const AI_BASE_URL = "https://api.a4f.co/v1";
+const AI_TIMEOUT_MS = 6000;
+const AI_MAX_TOKENS = 40;
+const AI_TEMPERATURE = 0.7;
 
 let openai: OpenAI | null = null;
 if (AI_API_KEY) {
   openai = new OpenAI({
     baseURL: AI_BASE_URL,
     apiKey: AI_API_KEY,
+    timeout: AI_TIMEOUT_MS,
   });
   console.log("[AI] OpenAI client initialized with base URL:", AI_BASE_URL);
 } else {
   console.error("[AI] WARNING: AI_API_KEY not found in environment variables!");
+}
+
+async function prewarmModels() {
+  if (!openai) return;
+  console.log("[AI PREWARM] Starting model pre-warming...");
+  
+  const models = BOT_OPTIONS.map(b => b.model);
+  for (const model of models) {
+    try {
+      const start = Date.now();
+      await Promise.race([
+        openai.chat.completions.create({
+          model,
+          messages: [{ role: "user", content: "Hi" }],
+          max_tokens: 5,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000))
+      ]);
+      console.log(`[AI PREWARM] ${model} warmed in ${Date.now() - start}ms`);
+    } catch (e: any) {
+      console.log(`[AI PREWARM] ${model} failed: ${e.message}`);
+    }
+  }
+  console.log("[AI PREWARM] Complete");
+}
+
+interface AiMoveResult {
+  from: string;
+  to: string;
+  comment: string;
+  modelUsed: string;
+  timeMs: number;
+  fallbacksTriggered: string[];
+}
+
+async function callAiWithTimeout(model: string, prompt: string, legalMoves: string[]): Promise<{ move: string; comment: string } | null> {
+  if (!openai) return null;
+  
+  const systemPrompt = `You play chess. Return ONE legal move and a short taunt (max 8 words).
+Legal moves: ${legalMoves.join(', ')}
+Format exactly:
+MOVE: e2e4
+TEXT: Nice try.`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: AI_MAX_TOKENS,
+      temperature: AI_TEMPERATURE,
+    }, { signal: controller.signal });
+    
+    clearTimeout(timeout);
+    
+    const content = response.choices[0]?.message?.content?.trim() || "";
+    
+    const moveMatch = content.match(/MOVE:\s*([a-h][1-8][a-h][1-8])/i);
+    const textMatch = content.match(/TEXT:\s*(.+)/i);
+    
+    if (moveMatch) {
+      return {
+        move: moveMatch[1].toLowerCase(),
+        comment: textMatch ? textMatch[1].trim().substring(0, 50) : "..."
+      };
+    }
+    
+    const fallbackMove = content.match(/([a-h][1-8])[-]?([a-h][1-8])/i);
+    if (fallbackMove) {
+      return {
+        move: fallbackMove[1].toLowerCase() + fallbackMove[2].toLowerCase(),
+        comment: "Interesting move..."
+      };
+    }
+    
+    return null;
+  } catch (e: any) {
+    console.log(`[AI] ${model} failed: ${e.message}`);
+    return null;
+  }
+}
+
+async function getAiMoveWithFallback(game: Game): Promise<AiMoveResult> {
+  const chess = new Chess(game.fen);
+  const legalMoves = chess.moves({ verbose: true }).map(m => m.from + m.to);
+  const prompt = `FEN: ${game.fen}\nMake your move.`;
+  
+  const modelsToTry = [
+    game.botModel || "provider-3/deepseek-v3",
+    ...FALLBACK_MODELS.filter(m => m !== game.botModel)
+  ];
+  
+  const fallbacksTriggered: string[] = [];
+  
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
+    const startTime = Date.now();
+    
+    console.log(`[AI] Trying model ${i + 1}/${modelsToTry.length}: ${model}`);
+    
+    const result = await callAiWithTimeout(model, prompt, legalMoves);
+    const timeMs = Date.now() - startTime;
+    
+    if (result && legalMoves.some(lm => lm === result.move || lm.startsWith(result.move))) {
+      console.log(`[AI] Success with ${model} in ${timeMs}ms: ${result.move}`);
+      return {
+        from: result.move.substring(0, 2),
+        to: result.move.substring(2, 4),
+        comment: result.comment,
+        modelUsed: model,
+        timeMs,
+        fallbacksTriggered
+      };
+    }
+    
+    if (i > 0) {
+      fallbacksTriggered.push(modelsToTry[i - 1]);
+    }
+    console.log(`[AI] Model ${model} failed or returned invalid move, trying next...`);
+  }
+  
+  console.log("[AI] All models failed, using random legal move");
+  const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+  return {
+    from: randomMove.substring(0, 2),
+    to: randomMove.substring(2, 4),
+    comment: "The AI is struggling... retrying",
+    modelUsed: "fallback-random",
+    timeMs: 0,
+    fallbacksTriggered: modelsToTry
+  };
 }
 
 function getGameStatus(game: Game, chess: Chess): string {
@@ -41,83 +181,31 @@ async function executeAiMove(game: Game): Promise<Game> {
     throw new Error("AI service not configured. Please set AI_API_KEY environment variable.");
   }
 
-  const model = game.botModel || "provider-2/gpt-oss-120b";
-  const legalMoves = chess.moves({ verbose: true });
+  console.log(`[AI] Starting move for ${game.botName} (${game.botModel})`);
+  const startTime = Date.now();
+
+  const aiResult = await getAiMoveWithFallback(game);
   
-  console.log(`[AI REQUEST] Model: ${model}`);
-  console.log(`[AI REQUEST] FEN: ${game.fen}`);
-  console.log(`[AI REQUEST] Bot: ${game.botName}`);
-  console.log(`[AI REQUEST] Legal moves count: ${legalMoves.length}`);
-
-  let from = "";
-  let to = "";
-  let comment = "";
-
-  try {
-    const systemPrompt = `You are ${game.botName}, an AI playing chess as Black in "Unfair Chess". 
-You have a ${game.botPersonality} personality.
-
-Current board position (FEN): ${game.fen}
-Legal moves available: ${legalMoves.map(m => `${m.from}${m.to}`).join(', ')}
-
-You MUST respond in this EXACT JSON format:
-{"move": "e7e5", "message": "Your trash talk or comment here"}
-
-The move must be in format like "e7e5" (from square + to square, no dash).
-The message should be a short, witty comment in your personality style.
-Choose a legal move from the list above.`;
-
-    const response = await openai.chat.completions.create({
-      model: model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: "Make your move and say something." }
-      ],
-      max_tokens: 100,
-      temperature: 0.8,
-    });
-
-    const content = response.choices[0]?.message?.content?.trim() || "";
-    console.log(`[AI RESPONSE] Raw: ${content}`);
-
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.move && typeof parsed.move === 'string') {
-        const moveStr = parsed.move.replace('-', '').toLowerCase();
-        from = moveStr.substring(0, 2);
-        to = moveStr.substring(2, 4);
-        comment = parsed.message || "...";
-      }
-    } catch (parseErr) {
-      const moveMatch = content.match(/([a-h][1-8])[-]?([a-h][1-8])/i);
-      if (moveMatch) {
-        from = moveMatch[1].toLowerCase();
-        to = moveMatch[2].toLowerCase();
-      }
-      const msgMatch = content.match(/"message"\s*:\s*"([^"]+)"/);
-      comment = msgMatch ? msgMatch[1] : "Interesting...";
-    }
-
-    console.log(`[AI PARSED] Move: ${from}-${to}, Comment: ${comment}`);
-
-  } catch (e: any) {
-    console.error("[AI ERROR]", e.message || e);
-    throw new Error(`AI request failed: ${e.message || "Unknown error"}`);
+  console.log(`[AI RESULT] Model: ${aiResult.modelUsed}, Time: ${aiResult.timeMs}ms`);
+  if (aiResult.fallbacksTriggered.length > 0) {
+    console.log(`[AI FALLBACKS] Triggered: ${aiResult.fallbacksTriggered.join(', ')}`);
   }
 
-  if (!from || !to) {
-    throw new Error("AI did not return a valid move. Please try again.");
-  }
+  const { from, to, comment } = aiResult;
 
   const pieceAtFrom = chess.get(from as any);
   if (!pieceAtFrom) {
-    throw new Error(`AI returned invalid move: no piece at ${from}`);
+    console.error(`[AI] No piece at ${from}, using random move`);
+    const legalMoves = chess.moves({ verbose: true });
+    const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+    return executeAiMoveWithCoords(game, randomMove.from, randomMove.to, "Hmm...");
   }
 
-  const pieceAtTo = chess.get(to as any);
-  if (pieceAtTo && pieceAtTo.type === 'k') {
-    throw new Error("AI attempted to capture king - invalid move");
-  }
+  return executeAiMoveWithCoords(game, from, to, comment);
+}
+
+async function executeAiMoveWithCoords(game: Game, from: string, to: string, comment: string): Promise<Game> {
+  const chess = new Chess(game.fen);
 
   let notation = "";
   let isIllegalMove = false;
@@ -608,6 +696,8 @@ export async function registerRoutes(
 
     res.json(match);
   });
+
+  setTimeout(() => prewarmModels(), 1000);
 
   return httpServer;
 }

@@ -6,31 +6,36 @@ export const BOT_OPTIONS = [
   { 
     id: "chatgpt", 
     name: "ChatGPT", 
-    subtitle: "Gpt-oss-120b",
-    model: "provider-2/gpt-oss-120b",
-    personality: "Confident and strategic, makes bold predictions" 
+    subtitle: "Gpt-oss-20b",
+    model: "provider-6/gpt-oss-20b",
+    personality: "Confident and strategic" 
   },
   { 
     id: "deepseek", 
     name: "DeepSeek", 
     subtitle: "Deepseek-v3",
     model: "provider-3/deepseek-v3",
-    personality: "Mysterious and cryptic, speaks in riddles about the game" 
+    personality: "Mysterious and cryptic" 
   },
   { 
     id: "gemini", 
     name: "Gemini", 
-    subtitle: "Gemini-2.5 flash-lite",
-    model: "provider-5/gemini-2.5-flash-lite",
-    personality: "Dual personality - alternates between supportive and ruthless" 
+    subtitle: "Gemini-2.0-flash",
+    model: "provider-8/gemini-2.0-flash",
+    personality: "Quick and ruthless" 
   },
   { 
     id: "llama", 
     name: "LLaMA", 
-    subtitle: "llama-3.1-8b-instant",
-    model: "provider-6/llama-3.1-8b-instant",
-    personality: "Calm and zen-like, philosophical about chess and life" 
+    subtitle: "llama-4-scout-17b-16e-instruct",
+    model: "provider-6/llama-4-scout-17b-16e-instruct",
+    personality: "Calm and zen-like" 
   },
+] as const;
+
+export const FALLBACK_MODELS = [
+  "provider-3/deepseek-v3",
+  "provider-6/llama-4-scout-17b-16e-instruct",
 ] as const;
 
 export type BotId = typeof BOT_OPTIONS[number]["id"];
