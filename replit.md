@@ -2,7 +2,17 @@
 
 ## Overview
 
-Unfair Chess is a web-based chess game where humans play against AI opponents who don't follow standard chess rules. The human player must follow normal chess rules, but the AI can make illegal moves (teleport pieces, move through others, etc.) - creating an intentionally "unfair" but entertaining experience. Players can choose from various AI personalities (ChatGPT, Claude, DeepSeek, Gemini, Grok, LLaMA), each with unique trash-talk styles and commentary.
+Unfair Chess is a web-based chess game where humans play against AI opponents who don't follow standard chess rules. The human player must follow normal chess rules, but the AI can make illegal moves (teleport pieces, move through others, etc.) - creating an intentionally "unfair" but entertaining experience. Players can choose from various AI personalities (ChatGPT, DeepSeek, Gemini, LLaMA), each with unique trash-talk styles and commentary.
+
+## Recent Changes (Feb 2026)
+
+- Added time controls for online duels: Bullet (1min), Blitz (3min), Rapid (10min)
+- Added draw offer system with accept/decline UI
+- Added resign confirmation dialog
+- Added in-game chat for online matches
+- Added pawn promotion UI with piece selection (Queen, Rook, Bishop, Knight)
+- Fixed AI integration using https://api.a4f.co/v1 with proper model routing
+- Updated profile system with username, firstName, lastName, country with flag display
 
 ## User Preferences
 

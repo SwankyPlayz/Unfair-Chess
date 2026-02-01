@@ -13,7 +13,9 @@ import { type OnlineMatch, TIME_CONTROLS, type TimeControlId } from "@shared/sch
 
 export default function PlayDuel() {
   const [, setLocation] = useLocation();
-  const { playerId, playerName } = usePlayerStore();
+  const playerId = usePlayerStore((s) => s.playerId);
+  const getDisplayName = usePlayerStore((s) => s.getDisplayName);
+  const playerName = getDisplayName();
   const { toast } = useToast();
   
   const [status, setStatus] = useState<"idle" | "searching" | "matched">("idle");
@@ -401,6 +403,59 @@ function OnlineGameInterface({
   const [useChaosToken, setUseChaosToken] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
+  const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [chatMessage, setChatMessage] = useState("");
+  const [showChat, setShowChat] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const handleResign = async () => {
+    try {
+      const res = await fetch(buildUrl(api.matches.resign.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId }),
+      });
+      const data = await res.json();
+      setMatch(data);
+      setShowResignConfirm(false);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to resign", variant: "destructive" });
+    }
+  };
+
+  const handleDrawAction = async (action: "offer" | "accept" | "decline") => {
+    try {
+      const res = await fetch(buildUrl(api.matches.offerDraw.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, action }),
+      });
+      const data = await res.json();
+      setMatch(data);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to process draw", variant: "destructive" });
+    }
+  };
+
+  const handleSendChat = async () => {
+    if (!chatMessage.trim()) return;
+    try {
+      await fetch(buildUrl(api.matches.chat.path, { roomId: match.roomId }), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, message: chatMessage.trim() }),
+      });
+      setChatMessage("");
+    } catch (e) {
+      console.error("Chat error:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [match.chatMessages]);
 
   const isPlayer1 = match.player1Id === playerId;
   const myColor = isPlayer1 ? 'w' : 'b';
